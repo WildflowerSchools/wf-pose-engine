@@ -55,21 +55,22 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                     break
 
                 logger.info(f"Loading frames from {video_path}...")
-                video_reader = VideoInput(input_path=video_path, queue_frames=False)
+                video_reader = VideoInput(input_path=video_path, queue_frames=True)
 
-                frame_count = 0
+                frame_idx = 0
                 while True:
                     frame = video_reader.get_frame()
                     if frame is None:
-                        logger.debug(f"Exhausted all frames in {video_path}, record {frame_count} frames")
+                        logger.debug(f"Exhausted all frames in {video_path}")
                         break
                     
-                    frame_count += 1
+                    frame_idx += 1
 
                     frame_written = False
                     while not frame_written:
                         try:
-                            self.video_frame_queue.put(frame, timeout=2)
+                            logger.debug(f"Putting {video_path} on frame queue")
+                            self.video_frame_queue.put((frame, {"path": video_path, "frame_index": frame_idx}), timeout=2)
                             frame_written = True
                         except queue.Full:
                             logger.debug(f"Reached frame queue max size '{self.frame_queue_maxsize}', waiting to load additional frames...")
@@ -79,7 +80,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 self.video_path_queue.task_done()
             except queue.Empty:
                 if not self.wait_for_video_files:
-                    logger.info("Queue empty, killing video loader")
+                    logger.info("Video file queue empty and wait_for_video_files set to False, killing video loader")
                     self.video_loader_thread_stopped = True
                 
                 time.sleep(1)
@@ -87,9 +88,9 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
     def __iter__(self):
         while True:
             try:
-                frame = self.video_frame_queue.get(block=False)
+                frame, meta = self.video_frame_queue.get(block=False, timeout=1)
                 if frame is not None:
-                    yield frame
+                    yield (frame, meta)
             except queue.Empty:
                 # DO NOT REMOVE THE "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.video_frame_queue.qsize() == 0:
@@ -102,7 +103,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                         break
                 
                 logger.debug(f"Nothing to read from frame queue, waiting...")
-                time.sleep(1)
+                # time.sleep(0.1)
     
     def stop_video_loader(self):
         self.video_loader_thread_stopped = True
