@@ -7,7 +7,9 @@ from pydantic import BaseModel
 
 class LogConfig(BaseModel):
     LOGGER_NAME: str = "wf_pose_engine"
-    LOG_FORMAT: str = "%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s"
+    LOG_FORMAT: str = (
+        "%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s"
+    )
     LOG_LEVEL: str = "DEBUG"
 
     version: int = 1
@@ -26,10 +28,7 @@ class LogConfig(BaseModel):
         },
     }
     loggers: dict = {
-        "wf_pose_engine": {
-            "handlers": ["default"],
-            "level": LOG_LEVEL
-        },
+        "wf_pose_engine": {"handlers": ["default"], "level": LOG_LEVEL},
     }
 
 

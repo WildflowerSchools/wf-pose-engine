@@ -7,9 +7,14 @@ from dotenv import load_dotenv
 from . import core
 from .log import logger
 
+
 @click_log.simple_verbosity_option(logger)
 @click.group()
-@click.option("--env-file", type=click.Path(exists=True), help="env file to load environment_name variables from")
+@click.option(
+    "--env-file",
+    type=click.Path(exists=True),
+    help="env file to load environment_name variables from",
+)
 def cli(env_file):
     if env_file is None:
         env_file = os.path.join(os.getcwd(), ".env")
