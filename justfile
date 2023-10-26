@@ -10,7 +10,7 @@ lint:
     pylint pose_engine
 
 test:
-    pytest tests/
+    pytest tests/ --durations=0
 
 version:
     poetry version
