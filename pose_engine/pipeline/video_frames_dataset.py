@@ -44,15 +44,9 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self.video_path_queue.put(video_path)
 
     def start_video_loader(self):
-        while True:
-            if self.video_loader_thread_stopped:
-                break
-
+        while not self.video_loader_thread_stopped:
             try:
                 video_path = self.video_path_queue.get(block=False)
-
-                if self.video_loader_thread_stopped:
-                    break
 
                 logger.info(f"Loading frames from {video_path}...")
                 video_reader = VideoInput(input_path=video_path, queue_frames=True)
@@ -67,7 +61,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                     frame_idx += 1
 
                     frame_written = False
-                    while not frame_written:
+                    while not frame_written and not self.video_loader_thread_stopped:
                         try:
                             logger.debug(f"Putting {video_path} on frame queue")
                             self.video_frame_queue.put(
@@ -79,8 +73,6 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                             logger.debug(
                                 f"Reached frame queue max size '{self.frame_queue_maxsize}', waiting to load additional frames..."
                             )
-                            if self.video_loader_thread_stopped:
-                                break
 
                 self.video_path_queue.task_done()
             except queue.Empty:

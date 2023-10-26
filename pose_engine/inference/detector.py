@@ -1,3 +1,4 @@
+import pathlib
 from mmdet.apis import inference_detector, init_detector
 from mmpose.utils import adapt_mmdet_pipeline
 
