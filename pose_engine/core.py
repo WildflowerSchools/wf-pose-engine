@@ -15,31 +15,41 @@ def run():
     detector = inference.Detector(
         config="./configs/mmdet/rtmdet_m_640-8xb32_coco-person.py",
         checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth",
+        device="cuda:0",
     )
 
+    logger.info("Initializing dataset...")
     dataset = VideoFramesDataset(
         video_paths=[
             "./input/test_video/output000.mp4",
         ],
         wait_for_video_files=False,
     )
+    logger.info("Done initializing dataset")
 
     loader = VideoFramesDataLoader(
-        dataset, device="cuda:0", shuffle=False, num_workers=0, batch_size=4
+        dataset,
+        device="cpu",  # This should be "cuda:0", but need to wait until latter processing doesn't require moving frames back to CPU
+        shuffle=False,
+        num_workers=0,
+        batch_size=20,
+        pin_memory=True,
     )
 
     logger.info("Running detector")
     for batch_idx, (frames, meta) in enumerate(loader):
-        logger.info(f"Processing batch #{batch_idx}")
+        logger.info(f"Processing batch #{batch_idx} - Includes {len(frames)} frames")
         np_imgs = frames.cpu().detach().numpy()
         list_np_imgs = []
         for np_img in np_imgs:
             list_np_imgs.append(np_img)
 
         pred_instances = []
+        logger.info("Pre-detection processing")
         det_results = inference_detector(model=detector.detector, imgs=list_np_imgs)
         for det_result in det_results:
             pred_instances.append(det_result.pred_instances.cpu().numpy())
+        logger.info("Post-detection processing")
 
         all_bboxes = []
         for pred_instance in pred_instances:

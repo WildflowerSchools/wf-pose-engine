@@ -14,5 +14,7 @@ class VideoFramesDataLoader(torch.utils.data.DataLoader):
         return frames.to(device=self.device), meta
 
     def __iter__(self):
+        logger.info("Iterating outer loop")
         for d in super(VideoFramesDataLoader, self).__iter__():
+            logger.info("Iterating inner loop")
             yield (self.move_to_device(d))

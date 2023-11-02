@@ -6,13 +6,13 @@ from pose_engine.log import logger
 
 
 class Detector:
-    def __init__(self, config: str, checkpoint: str):
+    def __init__(self, config: str, checkpoint: str, device="cpu"):
         logger.info("Initializing object detector...")
 
         detector_config = config
         detector_checkpoint = checkpoint
         detector = init_detector(
-            config=detector_config, checkpoint=detector_checkpoint, device="cuda:0"
+            config=detector_config, checkpoint=detector_checkpoint, device=device
         )
         detector.cfg = adapt_mmdet_pipeline(detector.cfg)
 
