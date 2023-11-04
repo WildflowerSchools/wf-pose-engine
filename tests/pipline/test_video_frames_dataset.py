@@ -1,8 +1,8 @@
 import torch.utils.data
 
 from pose_engine.log import logger
-from pose_engine.pipeline.video_frames_dataloader import VideoFramesDataLoader
-from pose_engine.pipeline.video_frames_dataset import VideoFramesDataset
+from pose_engine.loaders.video_frames_dataloader import VideoFramesDataLoader
+from pose_engine.loaders.video_frames_dataset import VideoFramesDataset
 
 
 def test_dataset_batch_size_1():

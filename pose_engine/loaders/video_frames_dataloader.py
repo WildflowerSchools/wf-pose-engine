@@ -11,10 +11,19 @@ class VideoFramesDataLoader(torch.utils.data.DataLoader):
 
     def move_to_device(self, batch):
         frames, meta = batch
-        return frames.to(device=self.device), meta
+
+        meta_to_device = {}
+        for key, value in meta.items():
+            if isinstance(value, torch.Tensor):
+                meta_to_device[key] = value.to(device=self.device)
+            else:
+                meta_to_device[key] = value
+
+        return frames.to(device=self.device), meta_to_device
 
     def __iter__(self):
-        logger.info("Iterating outer loop")
+        logger.debug("Video frame dataloader is beginning its iteration...")
         for d in super(VideoFramesDataLoader, self).__iter__():
-            logger.info("Iterating inner loop")
             yield (self.move_to_device(d))
+
+        logger.debug("Video frame dataloader is done iterating")

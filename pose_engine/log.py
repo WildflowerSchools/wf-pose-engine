@@ -10,7 +10,7 @@ class LogConfig(BaseModel):
     LOG_FORMAT: str = (
         "%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s | %(message)s"
     )
-    LOG_LEVEL: str = "DEBUG"
+    LOG_LEVEL: str = "INFO"
 
     version: int = 1
     disable_existing_loggers: bool = False
