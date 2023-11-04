@@ -36,17 +36,17 @@ def run():
     ################################################################
     video_frames_loader = VideoFramesDataLoader(
         dataset=VideoFramesDataset(
-            frame_queue_maxsize=120, wait_for_video_files=False, mp_manager=mp_manager
+            frame_queue_maxsize=200, wait_for_video_files=False, mp_manager=mp_manager
         ),
         device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
         shuffle=False,
         num_workers=0,
-        batch_size=100,
+        batch_size=55,
         pin_memory=True,
     )
 
     bboxes_loader = BoundingBoxesDataLoader(
-        dataset=BoundingBoxesDataset(mp_manager=mp_manager),
+        dataset=BoundingBoxesDataset(bbox_queue_maxsize=200, mp_manager=mp_manager),
         shuffle=False,
         num_workers=0,
         batch_size=100,
@@ -62,6 +62,11 @@ def run():
         output_bbox_dataset=bboxes_loader.dataset,
     )
     video_files = [
+        "./input/test_video/output000.mp4",
+        "./input/test_video/output001.mp4",
+        "./input/test_video/output002.mp4",
+        "./input/test_video/output003.mp4",
+        "./input/test_video/output004.mp4",
         "./input/test_video/output000.mp4",
         "./input/test_video/output001.mp4",
         "./input/test_video/output002.mp4",

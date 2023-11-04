@@ -37,6 +37,13 @@ class PoseEstimator:
                 f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
             )
             for idx, img in enumerate(frames):
+                if isinstance(img, torch.Tensor):
+                    img = img.detach().cpu().numpy()
+
+                if isinstance(bboxes[idx], torch.Tensor):
+                    bboxes[idx] = bboxes[idx].detach().cpu().numpy()
+
+                # TODO: Update inference_topdown to work with Tensors
                 pose_results = inference_topdown(self.pose_estimator, img, bboxes[idx])
                 # data_samples = merge_data_samples(pose_results)
 
