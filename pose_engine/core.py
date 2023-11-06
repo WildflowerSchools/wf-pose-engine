@@ -23,11 +23,11 @@ def run(environment: str, start: datetime, end: datetime):
     # 1. Prepare models
     ################################################################
     detector = inference.Detector(
-        default_model="medium",
+        preset_model="medium",
         device="cuda:0",
     )
     pose_estimator = inference.PoseEstimator(
-        default_model="medium_384",
+        preset_model="medium_384",
         device="cuda:1",
     )
 
