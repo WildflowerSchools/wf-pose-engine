@@ -50,7 +50,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 video_path = self.video_path_queue.get(block=False)
 
                 logger.info(f"Loading frames from {video_path}...")
-                video_reader = VideoInput(input_path=video_path, queue_frames=False)
+                video_reader = VideoInput(input_path=video_path, queue_frames=True)
 
                 frame_idx = 0
                 while True:
@@ -92,8 +92,6 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
 
                 logger.debug("Video file queue empty, sleeping for 1 second")
                 time.sleep(1)
-
-        logger.info("start_video_loader method ended")
 
     def __iter__(self):
         self.video_loader_thread = Thread(target=self._start_video_loader, args=())

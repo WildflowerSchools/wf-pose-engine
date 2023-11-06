@@ -7,8 +7,35 @@ from pose_engine.log import logger
 
 
 class PoseEstimator:
-    def __init__(self, config: str, checkpoint: str, device: str = "cuda:1"):
+    def __init__(
+        self,
+        preset_model: str = None,
+        config: str = None,
+        checkpoint: str = None,
+        device: str = "cuda:1",
+    ):
         logger.info("Initializing pose estimator...")
+
+        if preset_model is None and (config is None or checkpoint is None):
+            raise ValueError(
+                "Pose estimator must be initialized with a default_model setting or by providing a config + checkpoint pair"
+            )
+
+        if preset_model == "small":
+            config = "./configs/body_2d_keypoint/rtmpose/body8/rtmpose-s_8xb256-420e_body8-256x192.py"
+            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.pth"
+        elif preset_model == "medium_256":
+            config = "./configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb256-420e_body8-256x192.py"
+            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.pth"
+        elif preset_model == "medium_384":
+            config = "./configs/body_2d_keypoint/rtmpose/body8/rtmpose-m_8xb256-420e_body8-384x288.py"
+            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-body7_pt-body7_420e-384x288-65e718c4_20230504.pth"
+        elif preset_model == "large_256":
+            config = "./configs/body_2d_keypoint/rtmpose/body8/rtmpose-l_8xb256-420e_body8-256x192.py"
+            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-l_simcc-body7_pt-body7_420e-256x192-4dba18fc_20230504.pth"
+        elif preset_model == "large_384":
+            config = "./configs/body_2d_keypoint/rtmpose/body8/rtmpose-l_8xb256-420e_body8-384x288.py"
+            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-l_simcc-body7_pt-body7_420e-384x288-3f5a1437_20230504.pth"
 
         pose_config = config
         pose_checkpoint = checkpoint

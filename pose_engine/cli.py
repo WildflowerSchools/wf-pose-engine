@@ -2,10 +2,66 @@ import os
 
 import click
 import click_log
+import itertools
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 from . import core
 from .log import logger
+
+
+now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+valid_date_formats = list(
+    itertools.chain.from_iterable(
+        map(
+            lambda d: [f"{d}", f"{d}%z", f"{d} %Z"],
+            ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"],
+        )
+    )
+)
+
+
+def click_add_options(options):
+    def _add_options(func):
+        for option in reversed(options):
+            func = option(func)
+        return func
+
+    return _add_options
+
+
+def timezone_aware(ctx, param, value):
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+
+    return value
+
+
+def click_options_environment_start_end():
+    return click_add_options(
+        [
+            click.option(
+                "--environment",
+                type=str,
+                required=True,
+                help="Accepts a single environment id UUID or environment name",
+            ),
+            click.option(
+                "--start",
+                type=click.DateTime(formats=valid_date_formats),
+                required=True,
+                callback=timezone_aware,
+                help="Start time in supported datetime format",
+            ),
+            click.option(
+                "--end",
+                type=click.DateTime(formats=valid_date_formats),
+                required=True,
+                callback=timezone_aware,
+                help="End time in supported datetime format",
+            ),
+        ]
+    )
 
 
 @click_log.simple_verbosity_option(logger)
@@ -23,9 +79,10 @@ def cli(env_file):
         load_dotenv(dotenv_path=env_file)
 
 
-@click.command(name="run", help="Stubbed help description")
-def cli_run():
-    core.run()
+@click.command(name="run", help="Generate and store poses from classroom video")
+@click_options_environment_start_end()
+def cli_run(environment, start, end):
+    core.run(environment=environment, start=start, end=end)
 
 
 cli.add_command(cli_run)

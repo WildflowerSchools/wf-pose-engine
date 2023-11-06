@@ -24,13 +24,26 @@ from mmengine.config import Config
 class Detector:
     def __init__(
         self,
-        config: str,
-        checkpoint: str,
+        preset_model: str = None,
+        config: str = None,
+        checkpoint: str = None,
         device="cpu",
         nms_iou_threshold=0.3,
         bbox_threshold=0.3,
     ):
         logger.info("Initializing object detector...")
+
+        if preset_model is None and (config is None or checkpoint is None):
+            raise ValueError(
+                "Detector must be initialized with a default_model setting or by providing a config + checkpoint pair"
+            )
+
+        if preset_model == "nano":
+            config = "./configs/mmdet/rtmdet_nano_640-8xb32_coco-person.py"
+            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_nano_8xb32-100e_coco-obj365-person-05d8511e.pth"
+        elif preset_model == "medium":
+            config = "./configs/mmdet/rtmdet_m_640-8xb32_coco-person.py"
+            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth"
 
         detector_config = Config.fromfile(config)  # config
         detector_checkpoint = checkpoint

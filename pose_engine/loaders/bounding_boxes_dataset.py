@@ -1,13 +1,9 @@
 from ctypes import c_bool
-from threading import Thread
-import time
 import queue
 
 import torch
 import torch.multiprocessing as mp
 import torch.utils.data
-
-from cv_utils import VideoInput
 
 from pose_engine.log import logger
 
