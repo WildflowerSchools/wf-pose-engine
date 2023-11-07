@@ -42,6 +42,12 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
     def add_video_path(self, video_path):
         self.video_path_queue.put(video_path)
 
+    def size(self):
+        return self.video_frame_queue.qsize()
+
+    def maxsize(self):
+        return self.frame_queue_maxsize
+
     def _start_video_loader(self):
         time.sleep(1)  # Hacky, but whatever
 

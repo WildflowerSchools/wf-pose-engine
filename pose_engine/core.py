@@ -11,6 +11,7 @@ from .loaders.video_frames_dataloader import VideoFramesDataLoader
 from .loaders.video_frames_dataset import VideoFramesDataset
 from .process_detection import ProcessDetection
 from .process_pose_estimation import ProcessPoseEstimation
+from .process_status_poll import StatusPoll
 from .video import VideoFetch
 
 
@@ -27,17 +28,18 @@ def run(environment: str, start: datetime, end: datetime):
         device="cuda:0",
     )
     pose_estimator = inference.PoseEstimator(
-        preset_model="medium_384",
+        preset_model="small",
         device="cuda:1",
     )
 
     ################################################################
     # 2. Prepare dataloaders
     ################################################################
+    video_frame_dataset = VideoFramesDataset(
+        frame_queue_maxsize=180, wait_for_video_files=False, mp_manager=mp_manager
+    )
     video_frames_loader = VideoFramesDataLoader(
-        dataset=VideoFramesDataset(
-            frame_queue_maxsize=300, wait_for_video_files=False, mp_manager=mp_manager
-        ),
+        dataset=video_frame_dataset,
         device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
         shuffle=False,
         num_workers=0,
@@ -45,8 +47,9 @@ def run(environment: str, start: datetime, end: datetime):
         pin_memory=True,
     )
 
+    bbox_dataset = BoundingBoxesDataset(bbox_queue_maxsize=180, mp_manager=mp_manager)
     bboxes_loader = BoundingBoxesDataLoader(
-        dataset=BoundingBoxesDataset(bbox_queue_maxsize=300, mp_manager=mp_manager),
+        dataset=bbox_dataset,
         shuffle=False,
         num_workers=0,
         batch_size=100,
@@ -77,9 +80,14 @@ def run(environment: str, start: datetime, end: datetime):
         pose_estimator=pose_estimator, input_bboxes_loader=bboxes_loader
     )
 
+    status_poll_process = StatusPoll(
+        bounding_box_dataset=bbox_dataset, video_frame_dataset=video_frame_dataset
+    )
+
     ################################################################
     # 4. Start processing!
     ################################################################
+    status_poll_process.start()
     pose_estimation_process.start()
     detection_process.start()
 
@@ -93,3 +101,5 @@ def run(environment: str, start: datetime, end: datetime):
     logger.info(
         f"Finished running pose estimation ({total_time:.3f} seconds - {(len(raw_videos) * 100) / total_time} fps)"
     )
+
+    status_poll_process.stop()

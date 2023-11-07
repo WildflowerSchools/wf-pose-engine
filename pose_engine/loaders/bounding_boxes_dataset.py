@@ -53,6 +53,9 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
     def size(self):
         return self.bbox_queue.qsize()
 
+    def maxsize(self):
+        return self.bbox_queue_maxsize
+
     def done_loading(self):
         self.done_loading_dataset.value = True
 
