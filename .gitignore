@@ -32,6 +32,8 @@ venv.bak/
 
 *.ipynb_checkpoints
 
+node_modules
+
 .python-version
 input/private_video
 output/

@@ -47,3 +47,27 @@ To verify frame counts = 100, use:
 ```
 ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames output/output000.mp4
 ```
+
+## Migrations
+
+> We're using `migrate-mongo` to manage the Mongo db and collections
+
+### RUN MIGRATIONS
+
+> Be sure Mongo is running and `MONGO_POSE2D_URI` is set in the `.env` file
+```
+just migrate
+```
+
+### INITIAL SETUP
+
+The migrations folder was initially created with:
+
+```
+mkdir -p migrate-mongo
+cd migrate-mongo
+npx migrate-mongo init
+npx migrate-mongo create pose_2d_collection
+```
+
+The `url` attribute was updated to: **process.env.MONGO_POSE2D_URI,** and the first migration file was filled in to create the **poses_2d** collection

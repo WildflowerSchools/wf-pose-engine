@@ -15,7 +15,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: iamaninsecurepassword
       MONGO_INITDB_NON_ROOT_USERNAME: pose-engine
       MONGO_INITDB_NON_ROOT_PASSWORD: iamaninsecurepassword
-      MONGO_INITDB_DATABASE: poses-2d
+      MONGO_INITDB_DATABASE: poses
     volumes:
       - "pose-engine-db:/data/db"
 

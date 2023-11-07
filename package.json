@@ -1,0 +1,26 @@
+{
+  "name": "wf-pose-engine",
+  "version": "1.0.0",
+  "description": "Tools for managing the wf-pose-engine deployment",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WildflowerSchools/wf-pose-engine.git"
+  },
+  "author": "Benjamin Jaffe-Talberg <ben.talberg@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/WildflowerSchools/wf-pose-engine/issues"
+  },
+  "homepage": "https://github.com/WildflowerSchools/wf-pose-engine#readme",
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "migrate-mongo": "^11.0.0"
+  }
+}

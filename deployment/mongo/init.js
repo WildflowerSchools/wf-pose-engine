@@ -1,5 +1,3 @@
-db = db.getSiblingDB(process.env.MONGO_INITDB_DATABASE);
-
 db.createUser(
     {
         user: process.env.MONGO_INITDB_NON_ROOT_USERNAME,
@@ -12,6 +10,3 @@ db.createUser(
         ]
     }
 );
-
-db.createCollection('placeholder');
-db.placeholder.insertOne({ hello: 'world' });

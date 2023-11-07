@@ -18,5 +18,8 @@ build-docker:
 run-docker: build-docker
     @docker compose -f stack.yml up
 
+migrate:
+    cd ./migrate-mongo && npx migrate-mongo up
+
 version:
     poetry version
