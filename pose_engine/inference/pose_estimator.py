@@ -1,7 +1,15 @@
-from mmpose.apis import inference_topdown, init_model as init_pose_estimator
-from mmpose.structures import merge_data_samples
+from typing import List, Optional, Union
+
 import numpy as np
+import torch.nn as nn
 import torch.utils.data
+
+from mmengine.dataset import Compose, pseudo_collate
+from mmengine.registry import init_default_scope
+from mmpose.apis import inference_topdown, init_model as init_pose_estimator
+from mmpose.structures import merge_data_samples, PoseDataSample
+from mmpose.structures.bbox import bbox_xywh2xyxy
+from PIL import Image
 
 from pose_engine.log import logger
 
@@ -46,6 +54,86 @@ class PoseEstimator:
         pose_estimator.share_memory()
         self.pose_estimator = pose_estimator
 
+    def inference_topdown(
+        self,
+        model: nn.Module,
+        imgs: Union[list[np.ndarray], list[str]],
+        bboxes: Optional[Union[List[List], List[np.ndarray]]] = None,
+        bbox_format: str = "xyxy",
+    ) -> List[PoseDataSample]:
+        """Inference image with a top-down pose estimator.
+
+        Args:
+            model (nn.Module): The top-down pose estimator
+            img (np.ndarray | str): The loaded image or image file to inference
+            bboxes (np.ndarray, optional): The bboxes in shape (N, 4), each row
+                represents a bbox. If not given, the entire image will be regarded
+                as a single bbox area. Defaults to ``None``
+            bbox_format (str): The bbox format indicator. Options are ``'xywh'``
+                and ``'xyxy'``. Defaults to ``'xyxy'``
+
+        Returns:
+            List[:obj:`PoseDataSample`]: The inference results. Specifically, the
+            predicted keypoints and scores are saved at
+            ``data_sample.pred_instances.keypoints`` and
+            ``data_sample.pred_instances.keypoint_scores``.
+        """
+        scope = model.cfg.get("default_scope", "mmpose")
+        if scope is not None:
+            init_default_scope(scope)
+        pipeline = Compose(model.cfg.test_dataloader.dataset.pipeline)
+
+        # construct batch data samples
+        data_list = []
+        for img_idx, img in enumerate(imgs):
+            img_bboxes = bboxes[img_idx]
+            if img_bboxes is None:
+                # get bbox from the image size
+                if isinstance(img, str):
+                    w, h = Image.open(img).size
+                else:
+                    h, w = img.shape[:2]
+
+                img_bboxes = np.array([[0, 0, w, h]], dtype=np.float32)
+            elif len(img_bboxes) == 0:
+                continue
+            else:
+                if isinstance(img_bboxes, list):
+                    img_bboxes = np.array(img_bboxes)
+
+                assert bbox_format in {
+                    "xyxy",
+                    "xywh",
+                }, f'Invalid bbox_format "{bbox_format}".'
+
+                if bbox_format == "xywh":
+                    img_bboxes = bbox_xywh2xyxy(img_bboxes)
+
+            for bbox in img_bboxes:
+                if isinstance(img, str):
+                    data_info = dict(img_path=img)
+                else:
+                    data_info = dict(img=img)
+                data_info["bbox"] = bbox[None]  # shape (1, 4)
+                data_info["bbox_score"] = np.ones(1, dtype=np.float32)  # shape (1,)
+                data_info.update(model.dataset_meta)
+                data_list.append(pipeline(data_info))
+
+        if len(data_list) > 0:
+            logger.info(
+                f"Running pose estimation against {len(data_list)} data samples"
+            )
+            # collate data list into a batch, which is a dict with following keys:
+            # batch['inputs']: a list of input images
+            # batch['data_samples']: a list of :obj:`PoseDataSample`
+            batch = pseudo_collate(data_list)
+            with torch.no_grad():
+                results = model.test_step(batch)
+        else:
+            results = []
+
+        return results
+
     def iter_dataloader(self, loader: torch.utils.data.DataLoader):
         """Runs pose estimation against all items in the provided loader
 
@@ -63,15 +151,20 @@ class PoseEstimator:
             logger.info(
                 f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
             )
+            imgs = []
             for idx, img in enumerate(frames):
                 if isinstance(img, torch.Tensor):
                     img = img.detach().cpu().numpy()
 
+                imgs.append(img)
+
                 if isinstance(bboxes[idx], torch.Tensor):
                     bboxes[idx] = bboxes[idx].detach().cpu().numpy()
 
-                # TODO: Update inference_topdown to work with Tensors
-                pose_results = inference_topdown(self.pose_estimator, img, bboxes[idx])
-                # data_samples = merge_data_samples(pose_results)
+            # TODO: Update inference_topdown to work with Tensors
+            pose_results = self.inference_topdown(
+                model=self.pose_estimator, imgs=imgs, bboxes=bboxes
+            )
+            # data_samples = merge_data_samples(pose_results)
 
-                yield pose_results
+            yield pose_results

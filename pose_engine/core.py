@@ -28,7 +28,7 @@ def run(environment: str, start: datetime, end: datetime):
         device="cuda:0",
     )
     pose_estimator = inference.PoseEstimator(
-        preset_model="small",
+        preset_model="large_384",
         device="cuda:1",
     )
 
@@ -43,7 +43,7 @@ def run(environment: str, start: datetime, end: datetime):
         device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
         shuffle=False,
         num_workers=0,
-        batch_size=60,
+        batch_size=70,
         pin_memory=True,
     )
 
@@ -52,7 +52,7 @@ def run(environment: str, start: datetime, end: datetime):
         dataset=bbox_dataset,
         shuffle=False,
         num_workers=0,
-        batch_size=100,
+        batch_size=25,
         pin_memory=True,
     )
 
