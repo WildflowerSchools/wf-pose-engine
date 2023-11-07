@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  mongo:
+    build:
+      context: ./deployment/mongo
+      dockerfile: mongo.dockerfile
+    restart: always
+    networks:
+      - pose-engine-network
+    ports:
+      - 27017:27017
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: iamaninsecurepassword
+      MONGO_INITDB_NON_ROOT_USERNAME: pose-engine
+      MONGO_INITDB_NON_ROOT_PASSWORD: iamaninsecurepassword
+      MONGO_INITDB_DATABASE: poses-2d
+    volumes:
+      - "pose-engine-db:/data/db"
+
+  mongo-express:
+    image: mongo-express
+    restart: always
+    networks:
+      - pose-engine-network
+    ports:
+      - 8081:8081
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: iamaninsecurepassword
+      ME_CONFIG_MONGODB_URL: mongodb://root:iamaninsecurepassword@mongo:27017/
+
+networks:
+  pose-engine-network:
+
+volumes:
+  pose-engine-db:

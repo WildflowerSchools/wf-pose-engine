@@ -2,7 +2,7 @@
 
 Generate and store 2D poses
 
-## Install
+## Install Locally
 
 1. Setup python environment
 
@@ -22,6 +22,13 @@ pyenv local wf-pose-engine
 just install
 ```
 
+3. Create Mongo service
+
+> Assumes `docker` is installed
+
+```
+just run-docker
+```
 
 ## Test
 

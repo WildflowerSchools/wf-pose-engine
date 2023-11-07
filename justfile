@@ -12,5 +12,11 @@ lint:
 test:
     pytest tests/ --durations=0
 
+build-docker:
+    @docker compose -f stack.yml build
+
+run-docker: build-docker
+    @docker compose -f stack.yml up
+
 version:
     poetry version
