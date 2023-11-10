@@ -6,7 +6,7 @@ module.exports = {
          timeseries: {
             timeField: "timestamp",
             metaField: "metadata",
-            granularity: "hours"
+            granularity: "seconds"
          }
       }
     )

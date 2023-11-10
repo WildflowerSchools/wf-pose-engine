@@ -21,5 +21,8 @@ run-docker: build-docker
 migrate:
     cd ./migrate-mongo && npx migrate-mongo up
 
+migrate-down:
+    cd ./migrate-mongo && npx migrate-mongo down
+
 version:
     poetry version

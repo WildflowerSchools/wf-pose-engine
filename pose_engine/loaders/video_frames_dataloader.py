@@ -9,6 +9,12 @@ class VideoFramesDataLoader(torch.utils.data.DataLoader):
 
         self.device = device
 
+    def total_video_files_queued(self) -> int:
+        return self.dataset.total_video_files_queued()
+
+    def total_video_frames_queued(self) -> int:
+        return self.dataset.total_video_frames_queued()
+
     def move_to_device(self, batch):
         frames, meta = batch
 

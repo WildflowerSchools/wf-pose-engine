@@ -24,7 +24,6 @@ from mmengine.config import Config
 class Detector:
     def __init__(
         self,
-        preset_model: str = None,
         config: str = None,
         checkpoint: str = None,
         device="cpu",
@@ -33,22 +32,16 @@ class Detector:
     ):
         logger.info("Initializing object detector...")
 
-        if preset_model is None and (config is None or checkpoint is None):
+        if config is None or checkpoint is None:
             raise ValueError(
-                "Detector must be initialized with a default_model setting or by providing a config + checkpoint pair"
+                "Detector must be initialized by providing a config + checkpoint pair"
             )
 
-        if preset_model == "nano":
-            config = "./configs/mmdet/rtmdet_nano_640-8xb32_coco-person.py"
-            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_nano_8xb32-100e_coco-obj365-person-05d8511e.pth"
-        elif preset_model == "medium":
-            config = "./configs/mmdet/rtmdet_m_640-8xb32_coco-person.py"
-            checkpoint = "https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmdet_m_8xb32-100e_coco-obj365-person-235e8209.pth"
+        self.config = config
+        self.checkpoint = checkpoint
 
-        detector_config = Config.fromfile(config)  # config
-        detector_checkpoint = checkpoint
         detector = init_detector(
-            config=detector_config, checkpoint=detector_checkpoint, device=device
+            config=self.config, checkpoint=self.checkpoint, device=device
         )
         detector.cfg = adapt_mmdet_pipeline(detector.cfg)
         detector.share_memory()
@@ -192,6 +185,15 @@ class Detector:
                     scores=bboxes_and_scores[:, 5],
                     iou_threshold=self.nms_iou_threshold,
                 )
-                retained_bboxes = bboxes_and_scores[nms_filter_idxs, :4]
+                retained_bboxes = bboxes_and_scores[nms_filter_idxs]
+
+                # Remove label id but retain score
+                retained_bboxes = torch.concatenate(
+                    (
+                        retained_bboxes[:, :4],
+                        retained_bboxes[:, 5, None],
+                    ),
+                    axis=1,
+                )  # [x, y, [x|w], [y|h], score]
 
                 yield retained_bboxes, frame, meta

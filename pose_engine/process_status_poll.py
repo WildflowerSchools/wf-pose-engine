@@ -1,27 +1,28 @@
 import multiprocessing as mp
 from threading import Thread
 import time
+from typing import Optional
 
-import torch
-
+from pose_engine import loaders
 from pose_engine.log import logger
 
 
-class StatusPoll:
+class ProcessStatusPoll:
     def __init__(
         self,
-        video_frame_dataset: torch.utils.data.IterableDataset,
-        bounding_box_dataset: torch.utils.data.IterableDataset,
+        video_frame_dataset: loaders.VideoFramesDataset,
+        bounding_box_dataset: loaders.BoundingBoxesDataset,
+        poses_dataset: loaders.PosesDataset,
         poll: int = 5,
     ):
-        self.video_frame_dataset = video_frame_dataset
-        self.bounding_box_dataset = bounding_box_dataset
-        self.poll = poll
+        self.video_frame_dataset: loaders.VideoFramesDataset = video_frame_dataset
+        self.bounding_box_dataset: loaders.BoundingBoxesDataset = bounding_box_dataset
+        self.poses_dataset: loaders.PosesDataset = poses_dataset
+        self.poll: int = poll
 
-        # self.process = mp.Process(target=self._run, args=())
-        self.stop_event = mp.Event()
+        self.stop_event: mp.Event = mp.Event()
 
-        self.polling_thread = None
+        self.polling_thread: Optional[Thread] = None
 
     def start(self):
         if self.polling_thread is not None:
@@ -44,6 +45,9 @@ class StatusPoll:
             )
             logger.info(
                 f"Bounding box queue size: {self.bounding_box_dataset.size()}/{self.bounding_box_dataset.maxsize()}"
+            )
+            logger.info(
+                f"Poses queue size: {self.poses_dataset.size()}/{self.poses_dataset.maxsize()}"
             )
 
             time.sleep(self.poll)

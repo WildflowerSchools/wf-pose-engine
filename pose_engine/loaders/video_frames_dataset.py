@@ -1,3 +1,4 @@
+from datetime import timedelta
 from threading import Thread
 import time
 import queue
@@ -10,13 +11,10 @@ from cv_utils import VideoInput
 from pose_engine.log import logger
 
 
-# mp.set_start_method("spawn", force=True)
-
-
 class VideoFramesDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
-        video_paths: list[str] = [],
+        video_objects: list[dict] = [],
         frame_queue_maxsize: int = 120,
         wait_for_video_files: bool = True,
         wait_for_video_frames: bool = True,
@@ -28,9 +26,12 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self.wait_for_video_files = wait_for_video_files
         self.wait_for_video_frames = wait_for_video_frames
 
-        self.video_path_queue = mp.JoinableQueue()
-        for v in video_paths:
-            self.video_path_queue.put(v)
+        self._total_video_files_queued = mp.Value("i", 0)
+        self._total_video_frames_queued = mp.Value("i", 0)
+
+        self.video_object_queue = mp.JoinableQueue()
+        for v in video_objects:
+            self.video_object_queue.put(v)
 
         if mp_manager is None:
             mp_manager = mp.Manager()
@@ -39,8 +40,9 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self.video_loader_thread_stopped = False
         self.video_loader_thread = None
 
-    def add_video_path(self, video_path):
-        self.video_path_queue.put(video_path)
+    def add_video_object(self, video_object):
+        self.video_object_queue.put(video_object)
+        self._total_video_files_queued.value += 1
 
     def size(self):
         return self.video_frame_queue.qsize()
@@ -48,12 +50,19 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
     def maxsize(self):
         return self.frame_queue_maxsize
 
+    def total_video_files_queued(self):
+        return self._total_video_files_queued.value
+
+    def total_video_frames_queued(self):
+        return self._total_video_frames_queued.value
+
     def _start_video_loader(self):
         time.sleep(1)  # Hacky, but whatever
 
         while not self.video_loader_thread_stopped:
             try:
-                video_path = self.video_path_queue.get(block=False)
+                video_object = self.video_object_queue.get(block=False)
+                video_path = video_object["video_local_path"]
 
                 logger.info(f"Loading frames from {video_path}...")
                 video_reader = VideoInput(input_path=video_path, queue_frames=True)
@@ -66,6 +75,9 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                         break
 
                     frame_idx += 1
+                    frame_time = video_object["video_timestamp"] + (
+                        (frame_idx - 1) * timedelta(seconds=(1 / video_object["fps"]))
+                    )
 
                     frame_written = False
                     while not frame_written and not self.video_loader_thread_stopped:
@@ -74,9 +86,18 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                                 f"Putting '{video_path}' frame index {frame_idx} on frame queue"
                             )
                             self.video_frame_queue.put(
-                                (frame, {"path": video_path, "frame_index": frame_idx}),
+                                (
+                                    frame,
+                                    {
+                                        "video_path": video_path,
+                                        "frame_index": frame_idx,
+                                        "frame_timestamp": frame_time.timestamp(),
+                                        "camera_device_id": video_object["device_id"],
+                                    },
+                                ),
                                 timeout=0.5,
                             )
+                            self._total_video_frames_queued.value += 1
                             frame_written = True
                         except queue.Full:
                             logger.debug(
@@ -86,7 +107,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                     logger.debug(
                         "Frame written or video_loader_thread_stopped, reading next frame"
                     )
-                self.video_path_queue.task_done()
+                self.video_object_queue.task_done()
 
                 logger.info(f"Finished loading frames from {video_path}")
             except queue.Empty:

@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch.multiprocessing as mp
 
 from . import inference
@@ -15,23 +17,37 @@ class ProcessDetection:
         input_video_frames_loader: VideoFramesDataLoader,
         output_bbox_dataset: BoundingBoxesDataset,
     ):
-        self.detector = detector
+        self.detector: inference.Detector = detector
 
-        self.input_video_frames_loader = input_video_frames_loader
-        self.output_bbox_dataset = output_bbox_dataset
+        self.input_video_frames_loader: VideoFramesDataLoader = (
+            input_video_frames_loader
+        )
+        self.output_bbox_dataset: BoundingBoxesDataset = output_bbox_dataset
 
-        self.process = mp.Process(target=self._run, args=())
+        self.process: Optional[mp.Process] = None
 
-    def add_video_files(self, files=[]):
-        for file in files:
-            self.input_video_frames_loader.dataset.add_video_path(file)
+    def add_video_objects(self, video_objects=[]):
+        for video_object in video_objects:
+            self.input_video_frames_loader.dataset.add_video_object(video_object)
+
+    def total_video_files_processed() -> int:
+        return 0
+
+    def total_video_frames_processed() -> int:
+        return 0
 
     def start(self):
-        self.process.start()
+        if self.process is None:
+            self.process = mp.Process(target=self._run, args=())
+            self.process.start()
 
     def wait(self):
         self.process.join()
         logger.info(f"ProcessDetection service finished: {self.process.exitcode}")
+
+    def stop(self):
+        self.process.close()
+        self.process = None
 
     def _run(self):
         logger.info("Running ProcessDetection service...")
