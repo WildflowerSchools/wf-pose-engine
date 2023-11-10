@@ -40,9 +40,7 @@ class ProcessStorePoses:
         logger.info("Running ProcessStorePoses service...")
         mongo_handle = Pose2dHandle()
 
-        for batch_idx, (poses, bboxes, meta) in enumerate(self.input_poses_loader):
-            # common_metadata: Pose2dMetadataCommon = common_metadata.model_copy()
-
+        for _batch_idx, (poses, bboxes, meta) in enumerate(self.input_poses_loader):
             pose_2d_batch = []
             for idx, pose in enumerate(poses):
                 pose_box = bboxes[idx]

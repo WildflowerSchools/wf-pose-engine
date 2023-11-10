@@ -4,10 +4,8 @@ import torch.multiprocessing as mp
 
 from . import inference
 from .log import logger
-from .loaders.bounding_boxes_dataloader import BoundingBoxesDataLoader
 from .loaders.bounding_boxes_dataset import BoundingBoxesDataset
 from .loaders.video_frames_dataloader import VideoFramesDataLoader
-from .loaders.video_frames_dataset import VideoFramesDataset
 
 
 class ProcessDetection:
@@ -26,14 +24,17 @@ class ProcessDetection:
 
         self.process: Optional[mp.Process] = None
 
-    def add_video_objects(self, video_objects=[]):
+    def add_video_objects(self, video_objects=None):
+        if video_objects is None:
+            video_objects = []
+
         for video_object in video_objects:
             self.input_video_frames_loader.dataset.add_video_object(video_object)
 
-    def total_video_files_processed() -> int:
+    def total_video_files_processed(self) -> int:
         return 0
 
-    def total_video_frames_processed() -> int:
+    def total_video_frames_processed(self) -> int:
         return 0
 
     def start(self):

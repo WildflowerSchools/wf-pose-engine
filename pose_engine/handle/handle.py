@@ -1,4 +1,3 @@
-# from bson.binary import UuidRepresentation
 from typing import List
 
 from pymongo import InsertOne, MongoClient
@@ -23,8 +22,15 @@ class Pose2dHandle:
 
     def insert_poses(self, pose_2d_batch: List[Pose2d]):
         bulk_requests = list(map(lambda p: InsertOne(p.model_dump()), pose_2d_batch))
-        # TODO: Probably use pydantic-mongo object mapping tool to handle the creation of pose records
         try:
-            result = self.poses_collection.bulk_write(bulk_requests, ordered=False)
+            logger.debug(
+                f"Inserting {len(bulk_requests)} into Mongo poses_2d database..."
+            )
+            self.poses_collection.bulk_write(bulk_requests, ordered=False)
+            logger.debug(
+                f"Successfully wrote {len(bulk_requests)} records into Mongo poses_2d database..."
+            )
         except BulkWriteError as e:
-            logger.error(f"Failed writing pose_2d_batch to Mongo: {e}")
+            logger.error(
+                f"Failed writing {len(bulk_requests)} records to Mongo poses_2d database: {e}"
+            )

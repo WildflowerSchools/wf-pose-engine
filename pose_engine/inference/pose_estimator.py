@@ -1,13 +1,13 @@
 from typing import List, Optional, Union
 
 import numpy as np
-import torch.nn as nn
+from torch import nn
 import torch.utils.data
 
 from mmengine.dataset import Compose, pseudo_collate
 from mmengine.registry import init_default_scope
-from mmpose.apis import inference_topdown, init_model as init_pose_estimator
-from mmpose.structures import merge_data_samples, PoseDataSample
+from mmpose.apis import init_model as init_pose_estimator
+from mmpose.structures import PoseDataSample
 from mmpose.structures.bbox import bbox_xywh2xyxy
 from PIL import Image
 
@@ -99,9 +99,9 @@ class PoseEstimator:
                 meta_mapping.extend([meta[img_idx]] * len(img_bboxes))
 
                 if isinstance(img, str):
-                    data_info = dict(img_path=img)
+                    data_info = {"img_path": img}
                 else:
-                    data_info = dict(img=img)
+                    data_info = {"img": img}
                 data_info["bbox"] = bbox[None, :4]  # shape (1, 4)
                 data_info["bbox_score"] = bbox[None, 4]  # shape (1,)
                 data_info.update(model.dataset_meta)
@@ -120,7 +120,7 @@ class PoseEstimator:
         else:
             results = []
 
-        for res_idx in range(len(results)):
+        for res_idx, _result in enumerate(results):
             results[res_idx].pred_instances["custom_metadata"] = [meta_mapping[res_idx]]
 
         return results

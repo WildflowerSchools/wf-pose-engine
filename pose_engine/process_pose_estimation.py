@@ -5,10 +5,7 @@ import torch.multiprocessing as mp
 from . import inference
 from .log import logger
 from .loaders.bounding_boxes_dataloader import BoundingBoxesDataLoader
-from .loaders.bounding_boxes_dataset import BoundingBoxesDataset
 from .loaders.poses_dataset import PosesDataset
-from .loaders.video_frames_dataloader import VideoFramesDataLoader
-from .loaders.video_frames_dataset import VideoFramesDataset
 
 
 class ProcessPoseEstimation:

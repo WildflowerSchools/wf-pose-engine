@@ -1,5 +1,4 @@
-import pathlib
-from typing import Optional, Sequence, Union
+from typing import Optional, Union
 
 from mmcv.ops import RoIPool
 from mmcv.transforms import Compose
@@ -7,18 +6,14 @@ from mmdet.apis import init_detector
 from mmdet.apis.inference import ImagesType
 from mmdet.structures import DetDataSample, SampleList
 from mmdet.utils import get_test_pipeline_cfg
-from mmpose.evaluation.functional import nms
 from mmpose.utils import adapt_mmdet_pipeline
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.utils.data
 import torchvision.ops
 
 from pose_engine.log import logger
-
-
-from mmengine.config import Config
 
 
 class Detector:
@@ -98,14 +93,14 @@ class Detector:
 
         all_inputs = []
         all_data_samples = []
-        for i, img in enumerate(imgs):
+        for img in imgs:
             # prepare data
             if isinstance(img, np.ndarray):
                 # TODO: remove img_id.
-                data_ = dict(img=img, img_id=0)
+                data_ = {"img": img, "img_id": 0}
             else:
                 # TODO: remove img_id.
-                data_ = dict(img_path=img, img_id=0)
+                data_ = {"img_path": img, "img_id": 0}
 
             if text_prompt:
                 data_["text"] = text_prompt
@@ -116,7 +111,7 @@ class Detector:
             all_inputs.append(data_["inputs"])
             all_data_samples.append(data_["data_samples"])
 
-        data_ = dict(inputs=all_inputs, data_samples=all_data_samples)
+        data_ = {"inputs": all_inputs, "data_samples": all_data_samples}
 
         # forward the model
         with torch.no_grad():
@@ -124,8 +119,8 @@ class Detector:
 
         if not is_batch:
             return result_list[0]
-        else:
-            return result_list
+
+        return result_list
 
     def iter_dataloader(self, loader: torch.utils.data.DataLoader):
         """Runs detection against all items in the provided loader

@@ -5,7 +5,7 @@ from pose_engine.log import logger
 
 class VideoFramesDataLoader(torch.utils.data.DataLoader):
     def __init__(self, *args, device="cpu", **kwargs):
-        super(VideoFramesDataLoader, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self.device = device
 
@@ -29,7 +29,7 @@ class VideoFramesDataLoader(torch.utils.data.DataLoader):
 
     def __iter__(self):
         logger.debug("Video frame dataloader is beginning its iteration...")
-        for d in super(VideoFramesDataLoader, self).__iter__():
-            yield (self.move_to_device(d))
+        for d in super().__iter__():
+            yield self.move_to_device(d)
 
         logger.debug("Video frame dataloader is done iterating")

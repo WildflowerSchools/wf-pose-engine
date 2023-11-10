@@ -11,7 +11,7 @@ class InferenceModel:
 
 class DetectorModel(InferenceModel):
     def __init__(self, *args, bounding_box_format_enum, **kwargs):
-        super(DetectorModel, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self.bounding_box_format_enum = bounding_box_format_enum
 
@@ -38,7 +38,7 @@ class DetectorModel(InferenceModel):
 
 class PoseModel(InferenceModel):
     def __init__(self, *args, keypoint_format_enum, **kwargs):
-        super(PoseModel, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
         self.keypoint_format_enum = keypoint_format_enum
 

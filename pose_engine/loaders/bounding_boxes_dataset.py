@@ -15,7 +15,7 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
         wait_for_bboxes: bool = True,
         mp_manager=None,
     ):
-        super(BoundingBoxesDataset).__init__()
+        super().__init__()
 
         self.done_loading_dataset = mp.Value(c_bool, False)
 
@@ -67,13 +67,13 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
                 if self.bbox_queue.qsize() == 0:
                     if not self.wait_for_bboxes:
                         logger.info(
-                            f"Nothing to read from bbox queue, terminating iterator"
+                            "Nothing to read from bbox queue, terminating iterator"
                         )
                         break
 
                     if self.done_loading_dataset.value:
                         logger.info(
-                            f"Stopping bounding box dataset iteration, bbox queue is empty and dataset has been set as having exhausted all boxes"
+                            "Stopping bounding box dataset iteration, bbox queue is empty and dataset has been set as having exhausted all boxes"
                         )
                         break
 

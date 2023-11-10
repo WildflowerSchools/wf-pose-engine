@@ -14,13 +14,16 @@ from pose_engine.log import logger
 class VideoFramesDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
-        video_objects: list[dict] = [],
+        video_objects: list[dict] = None,
         frame_queue_maxsize: int = 120,
         wait_for_video_files: bool = True,
         wait_for_video_frames: bool = True,
         mp_manager=None,
     ):
-        super(VideoFramesDataset).__init__()
+        super().__init__()
+
+        if video_objects is None:
+            video_objects = []
 
         self.frame_queue_maxsize = frame_queue_maxsize
         self.wait_for_video_files = wait_for_video_files
@@ -76,7 +79,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
 
                     frame_idx += 1
                     frame_time = video_object["video_timestamp"] + (
-                        (frame_idx - 1) * timedelta(seconds=(1 / video_object["fps"]))
+                        (frame_idx - 1) * timedelta(seconds=1 / video_object["fps"])
                     )
 
                     frame_written = False
@@ -135,13 +138,13 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 if self.video_frame_queue.qsize() == 0:
                     if not self.wait_for_video_frames:
                         logger.info(
-                            f"Nothing to read from frame queue, terminating iterator"
+                            "Nothing to read from frame queue, terminating iterator"
                         )
                         break
 
                     if self.video_loader_thread_stopped:
                         logger.info(
-                            f"Video loader is terminated and no more items in the frame queue, terminating iterator"
+                            "Video loader is terminated and no more items in the frame queue, terminating iterator"
                         )
                         break
 

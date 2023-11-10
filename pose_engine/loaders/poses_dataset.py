@@ -15,7 +15,7 @@ class PosesDataset(torch.utils.data.IterableDataset):
         wait_for_poses: bool = True,
         mp_manager=None,
     ):
-        super(PosesDataset).__init__()
+        super().__init__()
 
         self.done_loading_dataset = mp.Value(c_bool, False)
 
@@ -77,13 +77,13 @@ class PosesDataset(torch.utils.data.IterableDataset):
                 if self.pose_queue.qsize() == 0:
                     if not self.wait_for_poses:
                         logger.info(
-                            f"Nothing to read from pose queue, terminating iterator"
+                            "Nothing to read from pose queue, terminating iterator"
                         )
                         break
 
                     if self.done_loading_dataset.value:
                         logger.info(
-                            f"Stopping bounding pose dataset iteration, pose queue is empty and dataset has been set as having exhausted all poses"
+                            "Stopping bounding pose dataset iteration, pose queue is empty and dataset has been set as having exhausted all poses"
                         )
                         break
 

@@ -1,10 +1,10 @@
+from datetime import datetime, timezone
+import itertools
 import os
 
+from dotenv import load_dotenv
 import click
 import click_log
-import itertools
-from datetime import datetime, timezone
-from dotenv import load_dotenv
 
 from . import core
 from .log import logger
@@ -30,7 +30,7 @@ def click_add_options(options):
     return _add_options
 
 
-def timezone_aware(ctx, param, value):
+def timezone_aware(_ctx, _param, value):
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
 
