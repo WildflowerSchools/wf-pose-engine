@@ -2,6 +2,18 @@
 
 Generate and store 2D poses
 
+## Run Pose Generation
+
+```
+poetry run python -m pose_engine \
+       --verbosity INFO \
+       --env-file .env \
+       run \
+       --environment dahlia \
+       --start 2023-11-06T08:00:00-0800 \
+       --end 2023-11-06T08:00:01-0800
+```
+
 ## Install Locally
 
 1. Setup python environment

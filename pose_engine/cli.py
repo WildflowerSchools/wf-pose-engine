@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 import click
 import click_log
 
-from . import core
 from .log import logger
 
 
@@ -69,19 +68,21 @@ def click_options_environment_start_end():
 @click.option(
     "--env-file",
     type=click.Path(exists=True),
-    help="env file to load environment_name variables from",
+    help="env file path",
 )
 def cli(env_file):
     if env_file is None:
         env_file = os.path.join(os.getcwd(), ".env")
 
     if os.path.exists(env_file):
+        logger.info("Loading env file")
         load_dotenv(dotenv_path=env_file)
-
 
 @click.command(name="run", help="Generate and store poses from classroom video")
 @click_options_environment_start_end()
 def cli_run(environment, start, end):
+    from . import core
+
     core.run(environment=environment, start=start, end=end)
 
 
