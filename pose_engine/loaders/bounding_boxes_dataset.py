@@ -56,6 +56,11 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
     def done_loading(self):
         self.done_loading_dataset.value = True
 
+    def __getitem__(self, _idx):
+        raise NotImplementedError(
+            "Attempted to use __getitem__, but BoundingBoxesDataset is an IterableDataset so __getitem__ is intentionally not implemented"
+        )
+
     def __iter__(self):
         while True:
             try:

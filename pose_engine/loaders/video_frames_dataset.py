@@ -123,6 +123,11 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 logger.debug("Video file queue empty, sleeping for 1 second")
                 time.sleep(1)
 
+    def __getitem__(self, _idx):
+        raise NotImplementedError(
+            "Attempted to use __getitem__, but VideoFramesDataset is an IterableDataset so __getitem__ is intentionally not implemented"
+        )
+
     def __iter__(self):
         self.video_loader_thread = Thread(target=self._start_video_loader, args=())
         self.video_loader_thread.daemon = True
