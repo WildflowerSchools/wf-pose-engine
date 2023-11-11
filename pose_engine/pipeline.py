@@ -90,6 +90,7 @@ class Pipeline:
             config=self.pose_estimator_model.config,
             checkpoint=self.pose_estimator_model.checkpoint,
             device=self.pose_estimator_device,
+            max_boxes_per_inference=70,
         )
 
     def _init_dataloaders(self):
@@ -108,24 +109,24 @@ class Pipeline:
         )
 
         self.bbox_dataset = loaders.BoundingBoxesDataset(
-            bbox_queue_maxsize=180, wait_for_bboxes=True, mp_manager=self.mp_manager
+            bbox_queue_maxsize=150, wait_for_bboxes=True, mp_manager=self.mp_manager
         )
         self.bboxes_loader = loaders.BoundingBoxesDataLoader(
             dataset=self.bbox_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=25,
+            batch_size=70,
             pin_memory=True,
         )
 
         self.poses_dataset = loaders.PosesDataset(
-            pose_queue_maxsize=180, wait_for_poses=True
+            pose_queue_maxsize=200, wait_for_poses=True
         )
         self.poses_loader = loaders.PosesDataLoader(
             dataset=self.poses_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=25,
+            batch_size=100,
             pin_memory=False,
         )
 
@@ -160,14 +161,12 @@ class Pipeline:
             end=self.end_datetime,
         )
 
-        self.detection_process.add_video_objects(
-            # files=list(map(lambda v: v["video_local_path"], raw_videos))
-            video_objects=raw_videos
-        )
+        self.detection_process.add_video_objects(video_objects=raw_videos)
 
     def start(self):
         common_metadata = Pose2dMetadataCommon(
             inference_run_id=uuid.uuid4(),
+            inference_run_created_at=datetime.utcnow(),
             environment_id=self.environment_id,
             classroom_date=self.start_datetime.astimezone(
                 self.environment_timezone

@@ -10,8 +10,8 @@ poetry run python -m pose_engine \
        --env-file .env \
        run \
        --environment dahlia \
-       --start 2023-11-06T08:00:00-0800 \
-       --end 2023-11-06T08:00:01-0800
+       --start 2023-11-10T14:10:33-0700 \
+       --end 2023-11-10T14:10:35-0700
 ```
 
 ## Install Locally

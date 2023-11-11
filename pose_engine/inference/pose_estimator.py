@@ -20,6 +20,7 @@ class PoseEstimator:
         config: str = None,
         checkpoint: str = None,
         device: str = "cuda:1",
+        max_boxes_per_inference: int = 75,
     ):
         logger.info("Initializing pose estimator...")
 
@@ -30,6 +31,8 @@ class PoseEstimator:
 
         self.config = config
         self.checkpoint = checkpoint
+
+        self.max_boxes_per_inference = max_boxes_per_inference
 
         pose_estimator = init_pose_estimator(
             config=self.config, checkpoint=self.checkpoint, device=device
@@ -107,18 +110,22 @@ class PoseEstimator:
                 data_info.update(model.dataset_meta)
                 data_list.append(pipeline(data_info))
 
+        results = []
         if len(data_list) > 0:
-            logger.info(
-                f"Running pose estimation against {len(data_list)} data samples"
-            )
             # collate data list into a batch, which is a dict with following keys:
             # batch['inputs']: a list of input images
             # batch['data_samples']: a list of :obj:`PoseDataSample`
-            batch = pseudo_collate(data_list)
-            with torch.no_grad():
-                results = model.test_step(batch)
-        else:
-            results = []
+            chunk_size = self.max_boxes_per_inference
+            for chunk_ii in range(0, len(data_list), chunk_size):
+                sub_data_list = data_list[chunk_ii : chunk_ii + chunk_size]
+
+                logger.info(
+                    f"Running pose estimation against {len(sub_data_list)} data samples"
+                )
+
+                batch = pseudo_collate(sub_data_list)
+                with torch.no_grad():
+                    results.extend(model.test_step(batch))
 
         for res_idx, _result in enumerate(results):
             results[res_idx].pred_instances["custom_metadata"] = [meta_mapping[res_idx]]

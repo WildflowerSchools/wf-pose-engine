@@ -67,6 +67,7 @@ class Pose2dMetadataCommon(BaseModel):
     model_config = ConfigDict(populate_by_name=True, use_enum_values=True)
 
     inference_run_id: UUID4
+    inference_run_created_at: datetime
     environment_id: UUID4
     classroom_date: date
     keypoints_format: KeypointsFormatEnum

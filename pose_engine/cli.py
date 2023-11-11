@@ -78,6 +78,7 @@ def cli(env_file):
         logger.info("Loading env file")
         load_dotenv(dotenv_path=env_file)
 
+
 @click.command(name="run", help="Generate and store poses from classroom video")
 @click_options_environment_start_end()
 def cli_run(environment, start, end):
