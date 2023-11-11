@@ -67,7 +67,7 @@ class Pose2dMetadataCommon(BaseModel):
     model_config = ConfigDict(populate_by_name=True, use_enum_values=True)
 
     inference_run_id: UUID4
-    environment_id: str
+    environment_id: UUID4
     classroom_date: date
     keypoints_format: KeypointsFormatEnum
     bounding_box_format: BoundingBoxFormatEnum
@@ -82,7 +82,7 @@ class Pose2dMetadataCommon(BaseModel):
 
 
 class Pose2dMetadata(Pose2dMetadataCommon):
-    camera_device_id: str
+    camera_device_id: UUID4
 
 
 def rounded_float(v: float) -> float:

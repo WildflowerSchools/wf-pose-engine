@@ -46,7 +46,7 @@ class ProcessStorePoses:
                 pose_box = bboxes[idx]
                 pose_meta = meta[idx]
 
-                timestamp = datetime.fromtimestamp(float(pose_meta["frame_timestamp"]))
+                timestamp = datetime.utcfromtimestamp(float(pose_meta["frame_timestamp"]))
                 metadata = Pose2dMetadata(
                     **common_metadata.model_dump(),
                     camera_device_id=pose_meta["camera_device_id"],
