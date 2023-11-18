@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Optional, Union
 
 import numpy as np
@@ -98,8 +99,20 @@ class PoseEstimator:
                 if bbox_format == "xywh":
                     img_bboxes = bbox_xywh2xyxy(img_bboxes)
 
+            if (
+                meta[img_idx]["camera_device_id"]
+                == "c9f013f9-3100-4c2f-9762-c1fb35b445a0"
+            ):
+                timestamp = datetime.utcfromtimestamp(
+                    float(meta[img_idx]["frame_timestamp"])
+                )
+                logger.info(
+                    f"Preparing to process {len(img_bboxes)} boxes for poses {timestamp}"
+                )
+
             for bbox in img_bboxes:
-                meta_mapping.extend([meta[img_idx]] * len(img_bboxes))
+                # meta_mapping.extend([meta[img_idx]] * len(img_bboxes))
+                meta_mapping.append(meta[img_idx])
 
                 if isinstance(img, str):
                     data_info = {"img_path": img}
@@ -170,6 +183,10 @@ class PoseEstimator:
                 model=self.pose_estimator, imgs=imgs, bboxes=bboxes, meta=meta
             )
             # data_samples = merge_data_samples(pose_results)
+
+            # if meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
+            #     timestamp = datetime.utcfromtimestamp(float(meta["frame_timestamp"]))
+            #     logger.info(f"Found {len(pose_results)} poses at {timestamp}")
 
             if pose_results and len(pose_results) > 0:
                 for idx, pose_result in enumerate(pose_results):

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional, Union
 
 from mmcv.ops import RoIPool
@@ -190,5 +191,9 @@ class Detector:
                     ),
                     axis=1,
                 )  # [x, y, [x|w], [y|h], score]
+
+                # if meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
+                #     timestamp = datetime.utcfromtimestamp(float(meta["frame_timestamp"]))
+                #     logger.info(f"Found {len(retained_bboxes)} boxes at {timestamp}")
 
                 yield retained_bboxes, frame, meta

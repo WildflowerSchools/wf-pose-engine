@@ -68,7 +68,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 video_path = video_object["video_local_path"]
 
                 logger.info(f"Loading frames from {video_path}...")
-                video_reader = VideoInput(input_path=video_path, queue_frames=True)
+                video_reader = VideoInput(input_path=video_path, queue_frames=False)
 
                 frame_idx = 0
                 while True:
@@ -88,6 +88,9 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                             logger.debug(
                                 f"Putting '{video_path}' frame index {frame_idx} on frame queue"
                             )
+                            # if video_object["device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
+                            #     logger.info(f"Found frame at {frame_time}")
+
                             self.video_frame_queue.put(
                                 (
                                     frame,

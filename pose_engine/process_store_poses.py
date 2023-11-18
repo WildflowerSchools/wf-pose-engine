@@ -54,6 +54,9 @@ class ProcessStorePoses:
                     camera_device_id=pose_meta["camera_device_id"],
                 )
 
+                # if pose_meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
+                #     logger.info(f"Found pose at {timestamp}")
+
                 pose_2d = Pose2d(
                     timestamp=timestamp,
                     pose=PoseOutput(keypoints=pose),
