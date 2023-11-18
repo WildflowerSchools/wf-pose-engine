@@ -99,16 +99,16 @@ class PoseEstimator:
                 if bbox_format == "xywh":
                     img_bboxes = bbox_xywh2xyxy(img_bboxes)
 
-            if (
-                meta[img_idx]["camera_device_id"]
-                == "c9f013f9-3100-4c2f-9762-c1fb35b445a0"
-            ):
-                timestamp = datetime.utcfromtimestamp(
-                    float(meta[img_idx]["frame_timestamp"])
-                )
-                logger.info(
-                    f"Preparing to process {len(img_bboxes)} boxes for poses {timestamp}"
-                )
+            # if (
+            #     meta[img_idx]["camera_device_id"]
+            #     == "c9f013f9-3100-4c2f-9762-c1fb35b445a0"
+            # ):
+            #     timestamp = datetime.utcfromtimestamp(
+            #         float(meta[img_idx]["frame_timestamp"])
+            #     )
+            #     logger.info(
+            #         f"Preparing to process {len(img_bboxes)} boxes for poses {timestamp}"
+            #     )
 
             for bbox in img_bboxes:
                 # meta_mapping.extend([meta[img_idx]] * len(img_bboxes))
