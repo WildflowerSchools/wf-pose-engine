@@ -83,3 +83,12 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
                         break
 
                 # logger.debug(f"Nothing to read from bbox queue, waiting...")
+
+    def __del__(self):
+        try:
+            while True:
+                self.bbox_queue.get_nowait()
+        except queue.Empty:
+            pass
+        finally:
+            del self.bbox_queue

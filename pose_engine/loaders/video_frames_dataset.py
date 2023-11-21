@@ -161,5 +161,26 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         logger.debug("Video frames dataset iter finished")
 
     def stop_video_loader(self):
-        self.video_loader_thread_stopped = True
-        self.video_loader_thread.join()
+        if self.video_loader_thread is not None:
+            self.video_loader_thread_stopped = True
+            self.video_loader_thread.join()
+            self.video_loader_thread
+
+    def __del__(self):
+        try:
+            while True:
+                self.video_object_queue.get_nowait()
+        except queue.Empty:
+            pass
+        finally:
+            del self.video_object_queue
+
+        try:
+            while True:
+                self.video_frame_queue.get_nowait()
+        except queue.Empty:
+            pass
+        finally:
+            del self.video_frame_queue
+
+        self.stop_video_loader()

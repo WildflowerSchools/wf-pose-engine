@@ -87,4 +87,12 @@ def cli_run(environment, start, end):
     core.run(environment=environment, start=start, end=end)
 
 
+@click.command(name="batch", help="Generate poses for a batch of instances")
+def cli_batch():
+    from . import core
+
+    core.batch()
+
+
 cli.add_command(cli_run)
+cli.add_command(cli_batch)

@@ -197,3 +197,6 @@ class Detector:
                 #     logger.info(f"Found {len(retained_bboxes)} boxes at {timestamp}")
 
                 yield retained_bboxes, frame, meta
+
+    def __del__(self):
+        del self.detector

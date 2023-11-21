@@ -40,31 +40,34 @@ class ProcessStorePoses:
         logger.info("Running ProcessStorePoses service...")
         mongo_handle = Pose2dHandle()
 
-        for _batch_idx, (poses, bboxes, meta) in enumerate(self.input_poses_loader):
-            pose_2d_batch = []
-            for idx, pose in enumerate(poses):
-                pose_box = bboxes[idx]
-                pose_meta = meta[idx]
+        try:
+            for _batch_idx, (poses, bboxes, meta) in enumerate(self.input_poses_loader):
+                pose_2d_batch = []
+                for idx, pose in enumerate(poses):
+                    pose_box = bboxes[idx]
+                    pose_meta = meta[idx]
 
-                timestamp = datetime.utcfromtimestamp(
-                    float(pose_meta["frame_timestamp"])
-                )
-                metadata = Pose2dMetadata(
-                    **common_metadata.model_dump(),
-                    camera_device_id=pose_meta["camera_device_id"],
-                )
+                    timestamp = datetime.utcfromtimestamp(
+                        float(pose_meta["frame_timestamp"])
+                    )
+                    metadata = Pose2dMetadata(
+                        **common_metadata.model_dump(),
+                        camera_device_id=pose_meta["camera_device_id"],
+                    )
 
-                # if pose_meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
-                #     logger.info(f"Found pose at {timestamp}")
+                    # if pose_meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
+                    #     logger.info(f"Found pose at {timestamp}")
 
-                pose_2d = Pose2d(
-                    timestamp=timestamp,
-                    pose=PoseOutput(keypoints=pose),
-                    bbox=BoundingBoxOutput(bbox=pose_box),
-                    metadata=metadata,
-                )
-                pose_2d_batch.append(pose_2d)
+                    pose_2d = Pose2d(
+                        timestamp=timestamp,
+                        pose=PoseOutput(keypoints=pose),
+                        bbox=BoundingBoxOutput(bbox=pose_box),
+                        metadata=metadata,
+                    )
+                    pose_2d_batch.append(pose_2d)
 
-            mongo_handle.insert_poses(pose_2d_batch)
+                mongo_handle.insert_poses(pose_2d_batch)
+        finally:
+            mongo_handle.cleanup()
 
         logger.info("ProcessStorePoses service loop ended")

@@ -229,3 +229,6 @@ class PoseEstimator:
                         )
                     )
                     yield pose_prediction, box_prediction, pose_result_metadata
+
+    def __del__(self):
+        del self.pose_estimator

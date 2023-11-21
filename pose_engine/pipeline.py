@@ -115,7 +115,7 @@ class Pipeline:
             dataset=self.bbox_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=70,
+            batch_size=65,
             pin_memory=True,
         )
 
@@ -212,3 +212,7 @@ class Pipeline:
         self.start()
         self.wait()
         self.cleanup()
+
+    def __del__(self):
+        del self.pose_estimator
+        del self.detector

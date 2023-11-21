@@ -34,3 +34,10 @@ class Pose2dHandle:
             logger.error(
                 f"Failed writing {len(bulk_requests)} records to Mongo poses_2d database: {e}"
             )
+
+    def cleanup(self):
+        if self.client is not None:
+            self.client.close()
+
+    def __del__(self):
+        self.cleanup()
