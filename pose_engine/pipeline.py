@@ -28,6 +28,7 @@ class Pipeline:
         end_datetime: datetime,
         detector_model: DetectorModel,
         pose_estimator_model: PoseModel,
+        mp_manager: mp.Manager,
         detector_device: str = "cpu",
         pose_estimator_device: str = "cpu",
     ):
@@ -40,7 +41,7 @@ class Pipeline:
         self.detector_device: str = detector_device
         self.pose_estimator_device: str = pose_estimator_device
 
-        self.mp_manager: mp.Manager = mp.Manager()
+        self.mp_manager: mp.Manager = mp_manager
 
         self.environment_id: Optional[str] = None
         self.environment_name: Optional[str] = None
@@ -120,7 +121,7 @@ class Pipeline:
         )
 
         self.poses_dataset = loaders.PosesDataset(
-            pose_queue_maxsize=200, wait_for_poses=True
+            pose_queue_maxsize=200, wait_for_poses=True, mp_manager=self.mp_manager
         )
         self.poses_loader = loaders.PosesDataLoader(
             dataset=self.poses_dataset,
@@ -207,6 +208,10 @@ class Pipeline:
         self.pose_estimation_process.stop()
         self.detection_process.stop()
 
+        self.video_frame_dataset.cleanup()
+        self.bbox_dataset.cleanup()
+        self.poses_dataset.cleanup()
+
     def run(self):
         self._fetch_videos()
         self.start()
@@ -214,5 +219,10 @@ class Pipeline:
         self.cleanup()
 
     def __del__(self):
+        del self.status_poll_process
+        del self.store_poses_process
+        del self.pose_estimation_process
+        del self.detection_process
+
         del self.pose_estimator
         del self.detector

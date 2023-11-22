@@ -1,5 +1,7 @@
 import torch.utils.data
 
+from pose_engine.log import logger
+
 
 class PosesDataLoader(torch.utils.data.DataLoader):
     def __init__(self, *args, **kwargs):
@@ -9,3 +11,6 @@ class PosesDataLoader(torch.utils.data.DataLoader):
 
     def _collate_fn(self, data):
         return tuple(zip(*data))
+
+    def __del__(self):
+        del self.dataset

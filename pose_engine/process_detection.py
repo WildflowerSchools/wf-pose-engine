@@ -58,3 +58,6 @@ class ProcessDetection:
             self.output_bbox_dataset.add_bboxes(bbox_tuple)
 
         logger.info("ProcessDetection service loop ended")
+
+    def __del__(self):
+        del self.input_video_frames_loader

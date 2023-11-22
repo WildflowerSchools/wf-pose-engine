@@ -46,3 +46,6 @@ class ProcessPoseEstimation:
             self.output_poses_dataset.add_pose(pose_tuple)
 
         logger.info("ProcessPoseEstimation service loop ended")
+
+    def __del__(self):
+        del self.input_bboxes_loader

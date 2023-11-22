@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import torch.multiprocessing as mp
+
 from .known_inference_models import DetectorModel, PoseModel
 from .pipeline import Pipeline
 
@@ -8,10 +10,13 @@ def run(environment: str, start: datetime, end: datetime):
     detector_model = DetectorModel.rtmdet_medium()
     pose_model = PoseModel.rtmpose_large_384()
 
+    process_manager = mp.Manager()
+
     p = Pipeline(
         environment=environment,
         start_datetime=start,
         end_datetime=end,
+        mp_manager=process_manager,
         detector_model=detector_model,
         detector_device="cuda:0",
         pose_estimator_model=pose_model,
@@ -27,9 +32,9 @@ def batch():
     batch = [
         ["dahlia", "2023-07-20 19:38:33+00:00", "2023-07-20 19:38:35+00:00"],
         ["dahlia", "2023-07-20 19:38:33+00:00", "2023-07-20 19:38:35+00:00"],
-        ["dahlia", "2023-07-20 19:38:33+00:00", "2023-07-20 19:38:35+00:00"],
-        ["dahlia", "2023-07-20 19:38:33+00:00", "2023-07-20 19:38:35+00:00"],
     ]
+
+    process_manager = mp.Manager()
 
     for b in batch:
         environment = b[0]
@@ -40,9 +45,12 @@ def batch():
             environment=environment,
             start_datetime=start,
             end_datetime=end,
+            mp_manager=process_manager,
             detector_model=detector_model,
             detector_device="cuda:0",
             pose_estimator_model=pose_model,
             pose_estimator_device="cuda:1",
         )
         p.run()
+
+        del p

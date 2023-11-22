@@ -132,7 +132,7 @@ class PoseEstimator:
             for chunk_ii in range(0, len(data_list), chunk_size):
                 sub_data_list = data_list[chunk_ii : chunk_ii + chunk_size]
 
-                logger.info(
+                logger.debug(
                     f"Running pose estimation against {len(sub_data_list)} data samples"
                 )
 
@@ -153,82 +153,90 @@ class PoseEstimator:
         :returns: a generator of tuples (poses, meta)
         :rtype: generator
         """
-        logger.info("Running pose estimation against dataloader object...")
-
         total_frame_count = 0
         for batch_idx, (bboxes, frames, meta) in enumerate(loader):
-            total_frame_count += len(frames)
+            try:
+                total_frame_count += len(frames)
 
-            logger.info(
-                f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
-            )
-            # meta_mapping = []
-            imgs = []
-            for idx, img in enumerate(frames):
-                if isinstance(img, torch.Tensor):
-                    img = img.detach().cpu().numpy()
+                logger.debug(
+                    f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
+                )
+                # meta_mapping = []
+                imgs = []
+                for idx, img in enumerate(frames):
+                    if isinstance(img, torch.Tensor):
+                        img = img.detach().cpu().numpy()
 
-                imgs.append(img)
+                    imgs.append(img)
 
-                # if bboxes is None or len(bboxes[idx]) == 0:
-                #     meta_mapping.extend([meta])
-                # else:
-                #     meta_mapping.extend([meta] * len(bboxes[idx]))
+                    # if bboxes is None or len(bboxes[idx]) == 0:
+                    #     meta_mapping.extend([meta])
+                    # else:
+                    #     meta_mapping.extend([meta] * len(bboxes[idx]))
 
-                if bboxes is not None and isinstance(bboxes[idx], torch.Tensor):
-                    bboxes[idx] = bboxes[idx].detach().cpu().numpy()
+                    if bboxes is not None and isinstance(bboxes[idx], torch.Tensor):
+                        bboxes[idx] = bboxes[idx].detach().cpu().numpy()
 
-            # TODO: Update inference_topdown to work with Tensors
-            pose_results = self.inference_topdown(
-                model=self.pose_estimator, imgs=imgs, bboxes=bboxes, meta=meta
-            )
-            # data_samples = merge_data_samples(pose_results)
+                # TODO: Update inference_topdown to work with Tensors
+                pose_results = self.inference_topdown(
+                    model=self.pose_estimator, imgs=imgs, bboxes=bboxes, meta=meta
+                )
+                # data_samples = merge_data_samples(pose_results)
 
-            # if meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
-            #     timestamp = datetime.utcfromtimestamp(float(meta["frame_timestamp"]))
-            #     logger.info(f"Found {len(pose_results)} poses at {timestamp}")
+                # if meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
+                #     timestamp = datetime.utcfromtimestamp(float(meta["frame_timestamp"]))
+                #     logger.info(f"Found {len(pose_results)} poses at {timestamp}")
 
-            if pose_results and len(pose_results) > 0:
-                for idx, pose_result in enumerate(pose_results):
-                    if pose_result is None:
-                        continue
+                if pose_results and len(pose_results) > 0:
+                    for idx, pose_result in enumerate(pose_results):
+                        if pose_result is None:
+                            continue
 
-                    pose_result_keypoints = pose_result.pred_instances["keypoints"][0]
-                    pose_result_keypoint_visible = pose_result.pred_instances[
-                        "keypoints_visible"
-                    ][0]
-                    pose_result_keypoint_scores = pose_result.pred_instances[
-                        "keypoint_scores"
-                    ][0]
-                    pose_result_bboxes = pose_result.pred_instances["bboxes"][0]
-                    pose_result_bbox_scores = pose_result.pred_instances["bbox_scores"][
-                        0
-                    ]
-                    pose_result_metadata = pose_result.pred_instances[
-                        "custom_metadata"
-                    ][0]
+                        pose_result_keypoints = pose_result.pred_instances["keypoints"][
+                            0
+                        ]
+                        pose_result_keypoint_visible = pose_result.pred_instances[
+                            "keypoints_visible"
+                        ][0]
+                        pose_result_keypoint_scores = pose_result.pred_instances[
+                            "keypoint_scores"
+                        ][0]
+                        pose_result_bboxes = pose_result.pred_instances["bboxes"][0]
+                        pose_result_bbox_scores = pose_result.pred_instances[
+                            "bbox_scores"
+                        ][0]
+                        pose_result_metadata = pose_result.pred_instances[
+                            "custom_metadata"
+                        ][0]
 
-                    pose_prediction = np.concatenate(
-                        (
-                            pose_result_keypoints,  # 0, 1 = X, Y,
-                            np.full_like(
-                                np.expand_dims(pose_result_keypoint_visible, axis=1), -1
-                            ),  # 2 = visibility - mmPose doesn't produce actual visibility values, it simply duplicates scores. For now default the value to -1.
-                            np.expand_dims(
-                                pose_result_keypoint_scores, axis=1
-                            ),  # 3 = confidence
-                        ),
-                        axis=1,
-                    )
-                    box_prediction = np.concatenate(
-                        (
-                            pose_result_bboxes,  # 0, 1, 2, 3 = X1, Y1, X2, Y2
-                            np.expand_dims(
-                                pose_result_bbox_scores, axis=0
-                            ),  # 5 = confidence
+                        pose_prediction = np.concatenate(
+                            (
+                                pose_result_keypoints,  # 0, 1 = X, Y,
+                                np.full_like(
+                                    np.expand_dims(
+                                        pose_result_keypoint_visible, axis=1
+                                    ),
+                                    -1,
+                                ),  # 2 = visibility - mmPose doesn't produce actual visibility values, it simply duplicates scores. For now default the value to -1.
+                                np.expand_dims(
+                                    pose_result_keypoint_scores, axis=1
+                                ),  # 3 = confidence
+                            ),
+                            axis=1,
                         )
-                    )
-                    yield pose_prediction, box_prediction, pose_result_metadata
+                        box_prediction = np.concatenate(
+                            (
+                                pose_result_bboxes,  # 0, 1, 2, 3 = X1, Y1, X2, Y2
+                                np.expand_dims(
+                                    pose_result_bbox_scores, axis=0
+                                ),  # 5 = confidence
+                            )
+                        )
+                        yield pose_prediction, box_prediction, pose_result_metadata
+            finally:
+                del bboxes
+                del frames
+                del meta
 
     def __del__(self):
         del self.pose_estimator

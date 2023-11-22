@@ -73,7 +73,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 frame_idx = 0
                 while True:
                     frame = video_reader.get_frame()
-                    if frame is None:
+                    if frame is None or frame_idx >= 100:
                         logger.info(f"Exhausted all frames in {video_path}")
                         break
 
@@ -166,10 +166,11 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
             self.video_loader_thread.join()
             self.video_loader_thread
 
-    def __del__(self):
+    def cleanup(self):
         try:
             while True:
-                self.video_object_queue.get_nowait()
+                item = self.video_object_queue.get_nowait()
+                del item
         except queue.Empty:
             pass
         finally:
@@ -177,7 +178,8 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
 
         try:
             while True:
-                self.video_frame_queue.get_nowait()
+                item = self.video_frame_queue.get_nowait()
+                del item
         except queue.Empty:
             pass
         finally:

@@ -13,7 +13,7 @@ class ProcessStatusPoll:
         video_frame_dataset: loaders.VideoFramesDataset,
         bounding_box_dataset: loaders.BoundingBoxesDataset,
         poses_dataset: loaders.PosesDataset,
-        poll: int = 5,
+        poll: int = 10,
     ):
         self.video_frame_dataset: loaders.VideoFramesDataset = video_frame_dataset
         self.bounding_box_dataset: loaders.BoundingBoxesDataset = bounding_box_dataset
@@ -36,7 +36,11 @@ class ProcessStatusPoll:
 
     def stop(self):
         self.stop_event.set()
-        self.polling_thread = None
+        if self.polling_thread is not None:
+            self.polling_thread.join()
+
+            self.polling_thread = None
+            del self.polling_thread
 
     def _run(self):
         while not self.stop_event.is_set():

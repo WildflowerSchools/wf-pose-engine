@@ -131,72 +131,74 @@ class Detector:
         :returns: a generator of tuples (bboxes, frame, meta)
         :rtype: generator
         """
-        logger.info("Running detector against dataloader object...")
-
         total_frame_count = 0
         for batch_idx, (frames, meta) in enumerate(loader):
-            logger.info(
-                f"Processing detector batch #{batch_idx} - Includes {len(frames)} frames"
-            )
-            meta_as_list_of_dicts = []
-            for idx in range(len(frames)):
-                meta_list_item = {}
-                for key in meta.keys():
-                    meta_list_item[key] = meta[key][idx]
-
-                meta_as_list_of_dicts.append(meta_list_item)
-
-            total_frame_count += len(frames)
-
-            list_np_imgs = list(
-                frames.cpu().detach().numpy()
-            )  # Annoying we have to move frames/images to the CPU to run detector
-            det_results = self.inference_detector(
-                model=self.detector, imgs=list_np_imgs
-            )
-            for idx, det_result in enumerate(det_results):
-                frame = frames[idx]
-                meta = meta_as_list_of_dicts[idx]
-
-                bboxes_and_scores = torch.concatenate(
-                    (
-                        det_result.pred_instances.bboxes,
-                        det_result.pred_instances.labels[:, None],
-                        det_result.pred_instances.scores[:, None],
-                    ),
-                    axis=1,
+            try:
+                logger.debug(
+                    f"Processing detector batch #{batch_idx} - Includes {len(frames)} frames"
                 )
+                meta_as_list_of_dicts = []
+                for idx in range(len(frames)):
+                    meta_list_item = {}
+                    for key in meta.keys():
+                        meta_list_item[key] = meta[key][idx]
 
-                # Filter by label (person == 0) and bbox_threshold
-                bboxes_and_scores = bboxes_and_scores[
-                    torch.logical_and(
-                        bboxes_and_scores[:, 4] == 0,
-                        bboxes_and_scores[:, 5] > self.bbox_threshold,
+                    meta_as_list_of_dicts.append(meta_list_item)
+
+                total_frame_count += len(frames)
+
+                list_np_imgs = list(
+                    frames.cpu().detach().numpy()
+                )  # Annoying we have to move frames/images to the CPU to run detector
+                det_results = self.inference_detector(
+                    model=self.detector, imgs=list_np_imgs
+                )
+                for idx, det_result in enumerate(det_results):
+                    frame = frames[idx]
+                    meta_dictionary = meta_as_list_of_dicts[idx]
+
+                    bboxes_and_scores = torch.concatenate(
+                        (
+                            det_result.pred_instances.bboxes,
+                            det_result.pred_instances.labels[:, None],
+                            det_result.pred_instances.scores[:, None],
+                        ),
+                        axis=1,
                     )
-                ]
 
-                # Filter by NMS iou_threshold
-                nms_filter_idxs = torchvision.ops.nms(
-                    boxes=bboxes_and_scores[:, :4],
-                    scores=bboxes_and_scores[:, 5],
-                    iou_threshold=self.nms_iou_threshold,
-                )
-                retained_bboxes = bboxes_and_scores[nms_filter_idxs]
+                    # Filter by label (person == 0) and bbox_threshold
+                    bboxes_and_scores = bboxes_and_scores[
+                        torch.logical_and(
+                            bboxes_and_scores[:, 4] == 0,
+                            bboxes_and_scores[:, 5] > self.bbox_threshold,
+                        )
+                    ]
 
-                # Remove label id but retain score
-                retained_bboxes = torch.concatenate(
-                    (
-                        retained_bboxes[:, :4],
-                        retained_bboxes[:, 5, None],
-                    ),
-                    axis=1,
-                )  # [x, y, [x|w], [y|h], score]
+                    # Filter by NMS iou_threshold
+                    nms_filter_idxs = torchvision.ops.nms(
+                        boxes=bboxes_and_scores[:, :4],
+                        scores=bboxes_and_scores[:, 5],
+                        iou_threshold=self.nms_iou_threshold,
+                    )
+                    retained_bboxes = bboxes_and_scores[nms_filter_idxs]
 
-                # if meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
-                #     timestamp = datetime.utcfromtimestamp(float(meta["frame_timestamp"]))
-                #     logger.info(f"Found {len(retained_bboxes)} boxes at {timestamp}")
+                    # Remove label id but retain score
+                    retained_bboxes = torch.concatenate(
+                        (
+                            retained_bboxes[:, :4],
+                            retained_bboxes[:, 5, None],
+                        ),
+                        axis=1,
+                    )  # [x, y, [x|w], [y|h], score]
 
-                yield retained_bboxes, frame, meta
+                    # if meta["camera_device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
+                    #     timestamp = datetime.utcfromtimestamp(float(meta["frame_timestamp"]))
+                    #     logger.info(f"Found {len(retained_bboxes)} boxes at {timestamp}")
+
+                    yield retained_bboxes, frame, meta_dictionary
+            finally:
+                del meta
+                del frames
 
     def __del__(self):
         del self.detector

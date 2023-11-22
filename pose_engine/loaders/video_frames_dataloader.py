@@ -33,3 +33,6 @@ class VideoFramesDataLoader(torch.utils.data.DataLoader):
             yield self.move_to_device(d)
 
         logger.debug("Video frame dataloader is done iterating")
+
+    def __del__(self):
+        del self.dataset
