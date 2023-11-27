@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from threading import Thread
 import time
 import queue
@@ -18,6 +18,8 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         frame_queue_maxsize: int = 120,
         wait_for_video_files: bool = True,
         wait_for_video_frames: bool = True,
+        filter_min_datetime: datetime = None,
+        filter_max_datetime: datetime = None,
         mp_manager=None,
     ):
         super().__init__()
@@ -28,6 +30,8 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self.frame_queue_maxsize = frame_queue_maxsize
         self.wait_for_video_files = wait_for_video_files
         self.wait_for_video_frames = wait_for_video_frames
+        self.filter_min_datetime = filter_min_datetime
+        self.filter_max_datetime = filter_max_datetime
 
         self._total_video_files_queued = mp.Value("i", 0)
         self._total_video_frames_queued = mp.Value("i", 0)
@@ -73,7 +77,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 frame_idx = 0
                 while True:
                     frame = video_reader.get_frame()
-                    if frame is None or frame_idx >= 100:
+                    if frame is None:
                         logger.info(f"Exhausted all frames in {video_path}")
                         break
 
@@ -82,15 +86,23 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                         (frame_idx - 1) * timedelta(seconds=1 / video_object["fps"])
                     )
 
+                    if self.filter_min_datetime is not None:
+                        if frame_time < self.filter_min_datetime:
+                            logger.warning(f"Skipping frame in {video_path} at frame time ({frame_time}), less than minimum datetime ({self.filter_min_datetime})")
+                            continue
+
+                    if self.filter_max_datetime is not None:
+                        if frame_time > self.filter_max_datetime:
+                            logger.warning(f"Skipping frame in {video_path} at frame time ({frame_time}) greater than maximum datetime ({self.filter_max_datetime})")
+                            continue
+
                     frame_written = False
                     while not frame_written and not self.video_loader_thread_stopped:
                         try:
                             logger.debug(
                                 f"Putting '{video_path}' frame index {frame_idx} on frame queue"
                             )
-                            # if video_object["device_id"] == "c9f013f9-3100-4c2f-9762-c1fb35b445a0":
-                            #     logger.info(f"Found frame at {frame_time}")
-
+                            
                             self.video_frame_queue.put(
                                 (
                                     frame,

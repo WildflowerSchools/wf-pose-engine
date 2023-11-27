@@ -99,6 +99,8 @@ class Pipeline:
             frame_queue_maxsize=180,
             wait_for_video_files=False,
             mp_manager=self.mp_manager,
+            filter_min_datetime=self.start_datetime,
+            filter_max_datetime=self.end_datetime
         )
         self.video_frames_loader = loaders.VideoFramesDataLoader(
             dataset=self.video_frame_dataset,
