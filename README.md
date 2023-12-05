@@ -18,7 +18,7 @@ poetry run python -m pose_engine \
 
 1. Setup python environment
 
-> Assumes `pyenv` is install
+> Assumes `pyenv` is installed
 
 ```
 pyenv local 3.11.5
@@ -26,7 +26,17 @@ pyenv virtualenv 3.11.5 wf-pose-engine
 pyenv local wf-pose-engine
 ```
 
-2. Install dependencies
+2. Setup npm environment
+
+> Assumes `nvm` is installed
+
+```
+nvm install 21.1.0
+nvm use 21.1.0
+npm install
+```
+
+3. Install dependencies
 
 > Assumes `just` is installed
 
@@ -34,7 +44,7 @@ pyenv local wf-pose-engine
 just install
 ```
 
-3. Create Mongo service
+4. Create Mongo service
 
 > Assumes `docker` is installed
 
@@ -64,9 +74,16 @@ ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_
 
 > We're using `migrate-mongo` to manage the Mongo db and collections
 
+### CREATE MIGRATION
+
+```
+just migrate-create <<description>>
+```
+
 ### RUN MIGRATIONS
 
 > Be sure Mongo is running and `MONGO_POSE2D_URI` is set in the `.env` file
+
 ```
 just migrate
 ```

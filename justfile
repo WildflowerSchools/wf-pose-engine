@@ -2,6 +2,8 @@ install:
     poetry run pip install chumpy
     poetry install
     poetry run mim install mmcv==2.1.0
+    
+    npm install
 
 format:
     black pose_engine
@@ -17,6 +19,9 @@ build-docker:
 
 run-docker: build-docker
     @docker compose -f stack.yml up
+
+migrate-create description:
+    cd ./migrate-mongo && npx migrate-mongo create {{description}}
 
 migrate:
     cd ./migrate-mongo && npx migrate-mongo up
