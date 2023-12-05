@@ -1,4 +1,4 @@
-from datetime import datetime
+from contextlib import nullcontext
 from typing import Optional, Union
 
 from mmcv.ops import RoIPool
@@ -11,6 +11,7 @@ from mmpose.utils import adapt_mmdet_pipeline
 import numpy as np
 import torch
 from torch import nn
+import torch.multiprocessing as mp
 import torch.utils.data
 import torchvision.ops
 
@@ -25,6 +26,7 @@ class Detector:
         device="cpu",
         nms_iou_threshold=0.3,
         bbox_threshold=0.3,
+        use_fp_16=False,
     ):
         logger.info("Initializing object detector...")
 
@@ -36,15 +38,30 @@ class Detector:
         self.config = config
         self.checkpoint = checkpoint
 
+        self.use_fp_16 = use_fp_16
+
         detector = init_detector(
             config=self.config, checkpoint=self.checkpoint, device=device
         )
         detector.cfg = adapt_mmdet_pipeline(detector.cfg)
         detector.share_memory()
 
-        self.detector = detector
+        if self.use_fp_16:
+            self.detector = detector.half().to(device)
+        else:
+            self.detector = detector
+
+        # TODO: Solve issue with compiled model not being serializable
+        # self.detector = torch.compile(self.detector)
+
         self.nms_iou_threshold = nms_iou_threshold
         self.bbox_threshold = bbox_threshold
+
+        self._inference_count = mp.Value("i", 0)
+
+    @property
+    def inference_count(self):
+        return self._inference_count.value
 
     def inference_detector(
         self,
@@ -131,7 +148,6 @@ class Detector:
         :returns: a generator of tuples (bboxes, frame, meta)
         :rtype: generator
         """
-        total_frame_count = 0
         for batch_idx, (frames, meta) in enumerate(loader):
             try:
                 logger.debug(
@@ -145,14 +161,17 @@ class Detector:
 
                     meta_as_list_of_dicts.append(meta_list_item)
 
-                total_frame_count += len(frames)
-
                 list_np_imgs = list(
                     frames.cpu().detach().numpy()
                 )  # Annoying we have to move frames/images to the CPU to run detector
-                det_results = self.inference_detector(
-                    model=self.detector, imgs=list_np_imgs
-                )
+
+                with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
+                    det_results = self.inference_detector(
+                        model=self.detector, imgs=list_np_imgs
+                    )
+
+                self._inference_count.value += len(frames)
+
                 for idx, det_result in enumerate(det_results):
                     frame = frames[idx]
                     meta_dictionary = meta_as_list_of_dicts[idx]

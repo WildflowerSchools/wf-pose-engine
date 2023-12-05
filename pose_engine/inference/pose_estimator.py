@@ -1,4 +1,4 @@
-from datetime import datetime
+from contextlib import nullcontext
 from typing import List, Optional, Union
 
 import numpy as np
@@ -11,6 +11,7 @@ from mmpose.apis import init_model as init_pose_estimator
 from mmpose.structures import PoseDataSample
 from mmpose.structures.bbox import bbox_xywh2xyxy
 from PIL import Image
+import torch.multiprocessing as mp
 
 from pose_engine.log import logger
 
@@ -22,6 +23,7 @@ class PoseEstimator:
         checkpoint: str = None,
         device: str = "cuda:1",
         max_boxes_per_inference: int = 75,
+        use_fp_16: bool = False,
     ):
         logger.info("Initializing pose estimator...")
 
@@ -35,12 +37,33 @@ class PoseEstimator:
 
         self.max_boxes_per_inference = max_boxes_per_inference
 
+        self.use_fp_16 = use_fp_16
+
         pose_estimator = init_pose_estimator(
             config=self.config, checkpoint=self.checkpoint, device=device
         )
-
         pose_estimator.share_memory()
-        self.pose_estimator = pose_estimator
+
+        if self.use_fp_16:
+            self.pose_estimator = pose_estimator.half().to(device)
+        else:
+            self.pose_estimator = pose_estimator
+
+        # TODO: Solve issue with compiled model not being serializable
+        # self.pose_estimator = torch.compile(self.pose_estimator)
+
+        self._frame_count = mp.Value(
+            "i", 0
+        )  # Each frame contains multiple boxes, so we track frames separately
+        self._inference_count = mp.Value("i", 0)
+
+    @property
+    def frame_count(self):
+        return self._frame_count.value
+
+    @property
+    def inference_count(self):
+        return self._inference_count.value
 
     def inference_topdown(
         self,
@@ -142,17 +165,16 @@ class PoseEstimator:
         :returns: a generator of tuples (poses, meta)
         :rtype: generator
         """
-        total_frame_count = 0
         for batch_idx, (bboxes, frames, meta) in enumerate(loader):
             try:
-                total_frame_count += len(frames)
+                self._frame_count.value += len(frames)
 
                 logger.debug(
                     f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
                 )
                 # meta_mapping = []
                 imgs = []
-                for idx, img in enumerate(frames):
+                for img_idx, img in enumerate(frames):
                     if isinstance(img, torch.Tensor):
                         img = img.detach().cpu().numpy()
 
@@ -161,15 +183,22 @@ class PoseEstimator:
                     # if bboxes is None or len(bboxes[idx]) == 0:
                     #     meta_mapping.extend([meta])
                     # else:
-                    #     meta_mapping.extend([meta] * len(bboxes[idx]))
+                    #     meta_mapping.extend([meta] * len(bboxes[img_idx]))
 
-                    if bboxes is not None and isinstance(bboxes[idx], torch.Tensor):
-                        bboxes[idx] = bboxes[idx].detach().cpu().numpy()
+                    if bboxes is not None and isinstance(bboxes[img_idx], torch.Tensor):
+                        bboxes[img_idx] = bboxes[img_idx].detach().cpu().numpy()
 
                 # TODO: Update inference_topdown to work with Tensors
-                pose_results = self.inference_topdown(
-                    model=self.pose_estimator, imgs=imgs, bboxes=bboxes, meta=meta
-                )
+
+                with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
+                    pose_results = self.inference_topdown(
+                        model=self.pose_estimator, imgs=imgs, bboxes=bboxes, meta=meta
+                    )
+
+                if bboxes is not None:
+                    for img_idx, img in enumerate(imgs):
+                        self._inference_count.value += len(bboxes[img_idx])
+
                 # data_samples = merge_data_samples(pose_results)
 
                 if pose_results and len(pose_results) > 0:

@@ -88,12 +88,16 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
 
                     if self.filter_min_datetime is not None:
                         if frame_time < self.filter_min_datetime:
-                            logger.warning(f"Skipping frame in {video_path} at frame time ({frame_time}), less than minimum datetime ({self.filter_min_datetime})")
+                            logger.warning(
+                                f"Skipping frame in {video_path} at frame time ({frame_time}), less than minimum datetime ({self.filter_min_datetime})"
+                            )
                             continue
 
                     if self.filter_max_datetime is not None:
                         if frame_time > self.filter_max_datetime:
-                            logger.warning(f"Skipping frame in {video_path} at frame time ({frame_time}) greater than maximum datetime ({self.filter_max_datetime})")
+                            logger.warning(
+                                f"Skipping frame in {video_path} at frame time ({frame_time}) greater than maximum datetime ({self.filter_max_datetime})"
+                            )
                             continue
 
                     frame_written = False
@@ -102,7 +106,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                             logger.debug(
                                 f"Putting '{video_path}' frame index {frame_idx} on frame queue"
                             )
-                            
+
                             self.video_frame_queue.put(
                                 (
                                     frame,

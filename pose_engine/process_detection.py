@@ -51,6 +51,8 @@ class ProcessDetection:
         self.process = None
 
     def _run(self):
+        # TODO: Consider instantiating detector here, inside the new process. If we do this, we may be able to compile the model and speed up inference.
+
         logger.info("Running ProcessDetection service...")
         for bbox_tuple in self.detector.iter_dataloader(
             loader=self.input_video_frames_loader

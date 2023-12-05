@@ -3,6 +3,7 @@ from threading import Thread
 import time
 from typing import Optional
 
+from pose_engine import inference
 from pose_engine import loaders
 from pose_engine.log import logger
 
@@ -13,11 +14,15 @@ class ProcessStatusPoll:
         video_frame_dataset: loaders.VideoFramesDataset,
         bounding_box_dataset: loaders.BoundingBoxesDataset,
         poses_dataset: loaders.PosesDataset,
+        detector: inference.Detector,
+        pose_estimator: inference.PoseEstimator,
         poll: int = 10,
     ):
         self.video_frame_dataset: loaders.VideoFramesDataset = video_frame_dataset
         self.bounding_box_dataset: loaders.BoundingBoxesDataset = bounding_box_dataset
         self.poses_dataset: loaders.PosesDataset = poses_dataset
+        self.detector = detector
+        self.pose_estimator = pose_estimator
         self.poll: int = poll
 
         self.stop_event: mp.Event = mp.Event()
@@ -43,7 +48,15 @@ class ProcessStatusPoll:
             del self.polling_thread
 
     def _run(self):
+        last_detector_inference_count = 0
+        last_pose_frame_count = 0
+        last_pose_inference_count = 0
+
         while not self.stop_event.is_set():
+            current_detector_inference_count = self.detector.inference_count
+            current_pose_frame_count = self.pose_estimator.frame_count
+            current_pose_inference_count = self.pose_estimator.inference_count
+
             logger.info(
                 f"Video frame queue size: {self.video_frame_dataset.size()}/{self.video_frame_dataset.maxsize()}"
             )
@@ -53,5 +66,18 @@ class ProcessStatusPoll:
             logger.info(
                 f"Poses queue size: {self.poses_dataset.size()}/{self.poses_dataset.maxsize()}"
             )
+            logger.info(
+                f"Overall Detector FPS: {(current_detector_inference_count - last_detector_inference_count) / self.poll}"
+            )
+            logger.info(
+                f"Overall Pose Inference FPS: {(current_pose_frame_count - last_pose_frame_count) / self.poll}"
+            )
+            logger.info(
+                f"Overall Pose Inference BBPS (bounding box per second): {(current_pose_inference_count - last_pose_inference_count) / self.poll}\n"
+            )
+
+            last_detector_inference_count = current_detector_inference_count
+            last_pose_frame_count = current_pose_frame_count
+            last_pose_inference_count = current_pose_inference_count
 
             time.sleep(self.poll)

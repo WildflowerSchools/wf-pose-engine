@@ -23,23 +23,18 @@ from .video import VideoFetch
 class Pipeline:
     def __init__(
         self,
-        environment: str,
-        start_datetime: datetime,
-        end_datetime: datetime,
         detector_model: DetectorModel,
         pose_estimator_model: PoseModel,
         mp_manager: mp.Manager,
         detector_device: str = "cpu",
         pose_estimator_device: str = "cpu",
+        use_fp_16: bool = False,
     ):
-        self.environment: str = environment
-        self.start_datetime: datetime = start_datetime
-        self.end_datetime: datetime = end_datetime
-
         self.detector_model: DetectorModel = detector_model
         self.pose_estimator_model: PoseModel = pose_estimator_model
         self.detector_device: str = detector_device
         self.pose_estimator_device: str = pose_estimator_device
+        self.use_fp_16 = use_fp_16
 
         self.mp_manager: mp.Manager = mp_manager
 
@@ -50,10 +45,7 @@ class Pipeline:
         self.current_run_start_time: Optional[datetime] = None
         self.current_run_inference_id: Optional[uuid.UUID] = None
 
-        self._load_environment()
         self._init_models()
-        self._init_dataloaders()
-        self._init_processes()
 
     def _load_environment(self):
         df_all_environments = honeycomb_io.fetch_all_environments(
@@ -85,6 +77,7 @@ class Pipeline:
             config=self.detector_model.config,
             checkpoint=self.detector_model.checkpoint,
             device=self.detector_device,
+            use_fp_16=self.use_fp_16,
         )
 
         self.pose_estimator = inference.PoseEstimator(
@@ -92,6 +85,7 @@ class Pipeline:
             checkpoint=self.pose_estimator_model.checkpoint,
             device=self.pose_estimator_device,
             max_boxes_per_inference=70,
+            use_fp_16=self.use_fp_16,
         )
 
     def _init_dataloaders(self):
@@ -100,14 +94,14 @@ class Pipeline:
             wait_for_video_files=False,
             mp_manager=self.mp_manager,
             filter_min_datetime=self.start_datetime,
-            filter_max_datetime=self.end_datetime
+            filter_max_datetime=self.end_datetime,
         )
         self.video_frames_loader = loaders.VideoFramesDataLoader(
             dataset=self.video_frame_dataset,
             device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
             shuffle=False,
             num_workers=0,
-            batch_size=70,
+            batch_size=60,
             pin_memory=True,
         )
 
@@ -118,7 +112,7 @@ class Pipeline:
             dataset=self.bbox_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=65,
+            batch_size=60,
             pin_memory=True,
         )
 
@@ -154,6 +148,8 @@ class Pipeline:
             video_frame_dataset=self.video_frame_dataset,
             bounding_box_dataset=self.bbox_dataset,
             poses_dataset=self.poses_dataset,
+            detector=self.detector,
+            pose_estimator=self.pose_estimator,
         )
 
     def _fetch_videos(self):
@@ -214,7 +210,15 @@ class Pipeline:
         self.bbox_dataset.cleanup()
         self.poses_dataset.cleanup()
 
-    def run(self):
+    def run(self, environment: str, start_datetime: datetime, end_datetime: datetime):
+        self.environment: str = environment
+        self.start_datetime: datetime = start_datetime
+        self.end_datetime: datetime = end_datetime
+
+        self._load_environment()
+        self._init_dataloaders()
+        self._init_processes()
+
         self._fetch_videos()
         self.start()
         self.wait()

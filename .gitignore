@@ -37,4 +37,6 @@ node_modules
 .python-version
 input/private_video
 output/
-nohup.out
+*.out
+*.log
+sandbox
