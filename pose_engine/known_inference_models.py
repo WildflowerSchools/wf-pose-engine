@@ -1,4 +1,4 @@
-from .handle.models import pose_2d
+from pose_db_io.handle.models import pose_2d
 
 
 class InferenceModel:

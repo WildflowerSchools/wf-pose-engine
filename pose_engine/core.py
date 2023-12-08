@@ -3,7 +3,8 @@ from datetime import datetime, timedelta
 import pandas as pd
 import torch.multiprocessing as mp
 
-from .handle.handle import Pose2dHandle
+from pose_db_io import PoseHandle
+
 from .honeycomb_service import HoneycombCachingClient
 from .known_inference_models import DetectorModel, PoseModel
 from .log import logger
@@ -35,8 +36,9 @@ def batch():
 
     honeycomb_client = HoneycombCachingClient()
 
-    poses = Pose2dHandle().fetch_current_pose_coverage()
-
+    #############################################################################
+    # Prepare the batch data (the time segments that poses should be generated for)
+    #############################################################################
     batch = [
         ["dahlia", "2023-06-30 20:32:46+00:00", "2023-06-30 20:34:58+00:00"],
         ["dahlia", "2023-06-30 20:35:14+00:00", "2023-06-30 20:43:45+00:00"],
@@ -69,100 +71,115 @@ def batch():
             batch,
         )
     )
-
-    existing_inferences = list(
-        map(lambda p: [p["environment_id"], p["start"], p["end"]], poses)
-    )
-    for e in existing_inferences:
-        e[0] = honeycomb_client.fetch_environment(environment=e[0])["environment_name"]
-
-    df_existing_inferences = pd.DataFrame(
-        existing_inferences, columns=["environment", "start_datetime", "end_datetime"]
-    )
-
     df_batch = pd.DataFrame(
         batch,
-        columns=["environment", "start_datetime", "end_datetime"],
+        columns=["environment_name", "start", "end"],
     )
-    df_batch["start_datetime"] = df_batch["start_datetime"] - timedelta(seconds=10)
-    df_batch["end_datetime"] = df_batch["end_datetime"] + timedelta(seconds=10)
+    df_batch["start"] = df_batch["start"] - timedelta(seconds=10)
+    df_batch["end"] = df_batch["end"] + timedelta(seconds=10)
+
+    #############################################################################
+    # Load information about the existing poses, this is to avoid generating poses more than once
+    #############################################################################
+    unique_environments = df_batch["environment_name"].unique()
+
+    all_existing_inferences = []
+    for environment in unique_environments:
+        environment_id = honeycomb_client.fetch_environment(environment)[
+            "environment_id"
+        ]
+
+        df_existing_inferences = (
+            PoseHandle().fetch_pose_2d_coverage_dataframe_by_environment_id(
+                environment_id=environment_id
+            )
+        )
+        all_existing_inferences.append(df_existing_inferences)
+    df_existing_inferences = pd.concat(all_existing_inferences)
+
+    df_existing_inferences["environment_name"] = df_existing_inferences[
+        "environment_id"
+    ].apply(
+        lambda e_id: honeycomb_client.fetch_environment(environment=e_id)[
+            "environment_name"
+        ]
+    )
 
     def merge_batch(_df_batch):
+        """
+        Merge overlapping start-end times
+        """
+
         segments = []
         for _, segment in _df_batch.iterrows():
-            environment = segment["environment"]
-            start = segment["start_datetime"]
-            end = segment["end_datetime"]
+            environment = segment["environment_name"]
+            start = segment["start"]
+            end = segment["end"]
             if len(segments) == 0:
                 segments.append(
                     {
-                        "environment": environment,
-                        "start_datetime": start,
-                        "end_datetime": end,
+                        "environment_name": environment,
+                        "start": start,
+                        "end": end,
                     }
                 )
                 continue
 
             merged = False
             for s in segments:
-                if environment != s["environment"]:
+                if environment != s["environment_name"]:
                     continue
 
-                if start < s["start_datetime"] and (
-                    end >= s["start_datetime"] and end <= s["end_datetime"]
-                ):
-                    s["start_datetime"] = start
+                if start < s["start"] and (end >= s["start"] and end <= s["end"]):
+                    s["start"] = start
                     merged = True
                     break
-                elif end > s["end_datetime"] and (
-                    start >= s["start_datetime"] and start <= s["end_datetime"]
-                ):
-                    s["end_datetime"] = end
+                elif end > s["end"] and (start >= s["start"] and start <= s["end"]):
+                    s["end"] = end
                     merged = True
                     break
-                elif start >= s["start_datetime"] and end <= s["end_datetime"]:
+                elif start >= s["start"] and end <= s["end"]:
                     merged = True
                     break
 
             if not merged:
                 segments.append(
                     {
-                        "environment": environment,
-                        "start_datetime": start,
-                        "end_datetime": end,
+                        "environment_name": environment,
+                        "start": start,
+                        "end": end,
                     }
                 )
 
-        df_merged_segments = pd.DataFrame(segments).sort_values(by=["start_datetime"])
+        df_merged_segments = pd.DataFrame(segments).sort_values(by=["start"])
         return df_merged_segments
 
     df_existing_merged_segments = merge_batch(df_existing_inferences)
     df_batch_merged_segments = merge_batch(df_batch)
 
+    #############################################################################
+    # Remove time segments that have already been processed by the pose_engine
+    #############################################################################
     segments = []
     for (
         environment_name,
         df_batch_merged_segments_by_environment,
-    ) in df_batch_merged_segments.groupby(by="environment"):
+    ) in df_batch_merged_segments.groupby(by="environment_name"):
         df_existing_merged_segments_by_environment = df_existing_merged_segments[
-            df_existing_merged_segments["environment"] == environment_name
+            df_existing_merged_segments["environment_name"] == environment_name
         ]
 
         existing_time_set = set()
         for _, row in df_existing_merged_segments_by_environment.iterrows():
             set_date_range = set(
-                pd.date_range(
-                    start=row["start_datetime"], end=row["end_datetime"], freq="100L"
-                )
+                pd.date_range(start=row["start"], end=row["end"], freq="100L")
             )
             existing_time_set = existing_time_set.union(set_date_range)
 
         new_time_set = set()
         for _, row in df_batch_merged_segments_by_environment.iterrows():
             set_date_range = set(
-                pd.date_range(
-                    start=row["start_datetime"], end=row["end_datetime"], freq="100L"
-                )
+                pd.date_range(start=row["start"], end=row["end"], freq="100L")
             )
             new_time_set = new_time_set.union(set_date_range)
 
@@ -180,13 +197,16 @@ def batch():
         for _, df_valid_group in df_valid_times.groupby(by="group"):
             segments.append(
                 {
-                    "environment": environment_name,
-                    "start_datetime": df_valid_group["frame_time"].min(),
-                    "end_datetime": df_valid_group["frame_time"].max(),
+                    "environment_name": environment_name,
+                    "start": df_valid_group["frame_time"].min(),
+                    "end": df_valid_group["frame_time"].max(),
                 }
             )
     df_merged_segments = pd.DataFrame(segments)
 
+    #############################################################################
+    # Process poses by looping through every time segment in df_merged_segments
+    #############################################################################
     process_manager = mp.Manager()
 
     p = Pipeline(
@@ -199,16 +219,15 @@ def batch():
     )
 
     df_merged_segments["length"] = (
-        df_merged_segments["end_datetime"] - df_merged_segments["start_datetime"]
+        df_merged_segments["end"] - df_merged_segments["start"]
     )
-
     logger.info(
         f"Starting pose processing, working through {df_merged_segments['length'].sum()} of the classroom"
     )
     for ii, (_, b) in enumerate(df_merged_segments.iterrows()):
         logger.info(f"Processing classroom segment {ii+1}/{len(df_merged_segments)}")
-        environment = b["environment"]
-        start = b["start_datetime"].to_pydatetime()
-        end = b["end_datetime"].to_pydatetime()
+        environment = b["environment_name"]
+        start = b["start"].to_pydatetime()
+        end = b["end"].to_pydatetime()
 
         p.run(environment=environment, start_datetime=start, end_datetime=end)

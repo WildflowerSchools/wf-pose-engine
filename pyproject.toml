@@ -22,6 +22,7 @@ wf-video-io = "^3.4.3"
 platformdirs = "^3.11.0"
 pydantic-settings = "^2.0.3"
 pymongo = "^4.6.0"
+wf-pose-db-io = "^0.1.1"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.10.0"

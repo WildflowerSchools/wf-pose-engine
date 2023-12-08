@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 import torch.multiprocessing as mp
 
 import honeycomb_io
+from pose_db_io.handle.models.pose_2d import Pose2dMetadataCommon
 
 from . import inference
-from .handle.models.pose_2d import Pose2dMetadataCommon
 from .known_inference_models import DetectorModel, PoseModel
 from .log import logger
 from . import loaders

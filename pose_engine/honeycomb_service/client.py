@@ -84,26 +84,6 @@ class HoneycombCachingClient:
             "client_secret": auth_client_secret,
         }
 
-    @lru_cache(maxsize=50)
-    def fetch_camera_devices(
-        self,
-        environment_id=None,
-        environment_name=None,
-        start=None,
-        end=None,
-        chunk_size=200,
-    ):
-        return honeycomb_io.fetch_devices(
-            device_types=honeycomb_io.DEFAULT_CAMERA_DEVICE_TYPES,
-            environment_id=environment_id,
-            environment_name=environment_name,
-            start=start,
-            end=end,
-            output_format="dataframe",
-            chunk_size=chunk_size,
-            **self.client_params,
-        )
-
     @lru_cache()
     def fetch_all_environments(self):
         return honeycomb_io.fetch_all_environments(

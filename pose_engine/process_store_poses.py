@@ -3,15 +3,16 @@ from typing import Optional
 
 import torch.multiprocessing as mp
 
-from . import loaders
-from .handle import Pose2dHandle
-from .handle.models.pose_2d import (
+from pose_db_io.handle import PoseHandle
+from pose_db_io.handle.models.pose_2d import (
     Pose2d,
     Pose2dMetadata,
     Pose2dMetadataCommon,
     PoseOutput,
     BoundingBoxOutput,
 )
+
+from . import loaders
 from .log import logger
 
 
