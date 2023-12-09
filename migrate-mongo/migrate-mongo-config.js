@@ -3,7 +3,7 @@ require('dotenv').config({ path: '../.env' })
 const config = {
   mongodb: {
     // TODO Change (or review) the url to your MongoDB:
-    url: process.env.MONGO_POSE2D_URI,
+    url: process.env.MONGO_POSE_URI,
 
     options: {
       useNewUrlParser: true, // removes a deprecation warning when connecting
