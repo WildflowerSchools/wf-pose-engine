@@ -15,4 +15,4 @@ class Settings(pydantic_settings.BaseSettings):
     )
     RAW_VIDEO_CACHE_DIR: str = f"{USER_CACHE_DIR}/raw_videos"
 
-    MONGO_POSE2D_URI: str = "mongodb://pose-engine:iamaninsecurepassword@localhost:27017/poses?authSource=poses"
+    MONGO_POSE_URI: str = "mongodb://pose-engine:iamaninsecurepassword@localhost:27017/poses?authSource=poses"

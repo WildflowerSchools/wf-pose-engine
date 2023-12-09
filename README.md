@@ -82,7 +82,7 @@ just migrate-create <<description>>
 
 ### RUN MIGRATIONS
 
-> Be sure Mongo is running and `MONGO_POSE2D_URI` is set in the `.env` file
+> Be sure Mongo is running and `MONGO_POSE_URI` is set in the `.env` file
 
 ```
 just migrate
@@ -99,4 +99,4 @@ npx migrate-mongo init
 npx migrate-mongo create pose_2d_collection
 ```
 
-The `url` attribute was updated to: **process.env.MONGO_POSE2D_URI,** and the first migration file was filled in to create the **poses_2d** collection
+The `url` attribute was updated to: **process.env.MONGO_POSE_URI,** and the first migration file was filled in to create the **poses_2d** collection
