@@ -39,7 +39,7 @@ class ProcessStorePoses:
 
     def _run(self, common_metadata: Pose2dMetadataCommon):
         logger.info("Running ProcessStorePoses service...")
-        mongo_handle = Pose2dHandle()
+        mongo_handle = PoseHandle()
 
         try:
             for _batch_idx, (poses, bboxes, meta) in enumerate(self.input_poses_loader):
@@ -65,7 +65,7 @@ class ProcessStorePoses:
                         )
                         pose_2d_batch.append(pose_2d)
 
-                    mongo_handle.insert_poses(pose_2d_batch)
+                    mongo_handle.insert_poses_2d(pose_2d_batch)
                 finally:
                     del poses
                     del bboxes

@@ -18,16 +18,18 @@ def run(environment: str, start: datetime, end: datetime):
     process_manager = mp.Manager()
 
     p = Pipeline(
-        environment=environment,
-        start_datetime=start,
-        end_datetime=end,
         mp_manager=process_manager,
         detector_model=detector_model,
         detector_device="cuda:0",
         pose_estimator_model=pose_model,
         pose_estimator_device="cuda:1",
+        use_fp_16=False
     )
-    p.run()
+    p.run(
+        environment=environment,
+        start_datetime=start,
+        end_datetime=end,
+    )
 
 
 def batch():
@@ -44,22 +46,22 @@ def batch():
         ["dahlia", "2023-06-30 20:35:14+00:00", "2023-06-30 20:43:45+00:00"],
         ["dahlia", "2023-06-30 20:44:59+00:00", "2023-06-30 21:34:00+00:00"],
         ["dahlia", "2023-06-30 21:37:54+00:00", "2023-06-30 21:47:05+00:00"],
-        ["dahlia", "2023-07-20 19:31:48+00:00", "2023-07-20 19:33:14+00:00"],
-        ["dahlia", "2023-07-20 19:33:33+00:00", "2023-07-20 19:42:52+00:00"],
-        ["dahlia", "2023-07-20 19:43:25+00:00", "2023-07-20 19:47:25+00:00"],
-        ["dahlia", "2023-07-20 19:58:09+00:00", "2023-07-20 20:02:46+00:00"],
-        ["dahlia", "2023-07-20 20:25:10+00:00", "2023-07-20 20:28:49+00:00"],
-        ["dahlia", "2023-07-20 20:46:29+00:00", "2023-07-20 21:03:02+00:00"],
-        ["dahlia", "2023-07-20 21:05:21+00:00", "2023-07-20 21:09:50+00:00"],
-        ["dahlia", "2023-07-20 21:10:33+00:00", "2023-07-20 21:35:21+00:00"],
-        ["dahlia", "2023-07-20 21:43:39+00:00", "2023-07-20 21:53:20+00:00"],
-        ["dahlia", "2023-07-20 21:59:33+00:00", "2023-07-20 22:07:21+00:00"],
-        ["dahlia", "2023-07-20 22:27:51+00:00", "2023-07-20 22:39:33+00:00"],
-        ["dahlia", "2023-07-20 22:42:25+00:00", "2023-07-20 22:43:58+00:00"],
-        ["dahlia", "2023-07-20 22:57:15+00:00", "2023-07-20 23:07:14+00:00"],
-        ["dahlia", "2023-07-20 23:12:27+00:00", "2023-07-20 23:17:14+00:00"],
-        ["dahlia", "2023-07-20 23:17:15+00:00", "2023-07-20 23:17:40+00:00"],
-        ["dahlia", "2023-07-20 23:18:03+00:00", "2023-07-20 23:25:51+00:00"],
+        # ["dahlia", "2023-07-20 19:31:48+00:00", "2023-07-20 19:33:14+00:00"],
+        # ["dahlia", "2023-07-20 19:33:33+00:00", "2023-07-20 19:42:52+00:00"],
+        # ["dahlia", "2023-07-20 19:43:25+00:00", "2023-07-20 19:47:25+00:00"],
+        # ["dahlia", "2023-07-20 19:58:09+00:00", "2023-07-20 20:02:46+00:00"],
+        # ["dahlia", "2023-07-20 20:25:10+00:00", "2023-07-20 20:28:49+00:00"],
+        # ["dahlia", "2023-07-20 20:46:29+00:00", "2023-07-20 21:03:02+00:00"],
+        # ["dahlia", "2023-07-20 21:05:21+00:00", "2023-07-20 21:09:50+00:00"],
+        # ["dahlia", "2023-07-20 21:10:33+00:00", "2023-07-20 21:35:21+00:00"],
+        # ["dahlia", "2023-07-20 21:43:39+00:00", "2023-07-20 21:53:20+00:00"],
+        # ["dahlia", "2023-07-20 21:59:33+00:00", "2023-07-20 22:07:21+00:00"],
+        # ["dahlia", "2023-07-20 22:27:51+00:00", "2023-07-20 22:39:33+00:00"],
+        # ["dahlia", "2023-07-20 22:42:25+00:00", "2023-07-20 22:43:58+00:00"],
+        # ["dahlia", "2023-07-20 22:57:15+00:00", "2023-07-20 23:07:14+00:00"],
+        # ["dahlia", "2023-07-20 23:12:27+00:00", "2023-07-20 23:17:14+00:00"],
+        # ["dahlia", "2023-07-20 23:17:15+00:00", "2023-07-20 23:17:40+00:00"],
+        # ["dahlia", "2023-07-20 23:18:03+00:00", "2023-07-20 23:25:51+00:00"],
     ]
     batch = list(
         map(
@@ -84,26 +86,34 @@ def batch():
     unique_environments = df_batch["environment_name"].unique()
 
     all_existing_inferences = []
-    for environment in unique_environments:
-        environment_id = honeycomb_client.fetch_environment(environment)[
-            "environment_id"
-        ]
+    check_against_existing_coverage = False
+    if check_against_existing_coverage:
+        for environment in unique_environments:
+            environment_id = honeycomb_client.fetch_environment(environment)[
+                "environment_id"
+            ]
 
-        df_existing_inferences = (
-            PoseHandle().fetch_pose_2d_coverage_dataframe_by_environment_id(
-                environment_id=environment_id
+            df_existing_inferences = (
+                PoseHandle().fetch_pose_2d_coverage_dataframe_by_environment_id(
+                    environment_id=environment_id
+                )
             )
-        )
-        all_existing_inferences.append(df_existing_inferences)
-    df_existing_inferences = pd.concat(all_existing_inferences)
+            all_existing_inferences.append(df_existing_inferences)
+        
+    if len(all_existing_inferences) == 0:
+        df_existing_inferences = pd.DataFrame([], columns=["environment_id", "environment_name", "start", "end"])
+    else:
+        df_existing_inferences = pd.concat(all_existing_inferences)
 
-    df_existing_inferences["environment_name"] = df_existing_inferences[
-        "environment_id"
-    ].apply(
-        lambda e_id: honeycomb_client.fetch_environment(environment=e_id)[
-            "environment_name"
-        ]
-    )
+        df_existing_inferences["environment_name"] = df_existing_inferences[
+            "environment_id"
+        ].apply(
+            lambda e_id: honeycomb_client.fetch_environment(environment=e_id)[
+                "environment_name"
+            ]
+        )
+
+    
 
     def merge_batch(_df_batch):
         """
@@ -151,7 +161,11 @@ def batch():
                     }
                 )
 
-        df_merged_segments = pd.DataFrame(segments).sort_values(by=["start"])
+        if len(segments) > 0:
+            df_merged_segments = pd.DataFrame(segments).sort_values(by=["start"])
+        else:
+            df_merged_segments = pd.DataFrame([], columns=_df_batch.columns)
+            
         return df_merged_segments
 
     df_existing_merged_segments = merge_batch(df_existing_inferences)
