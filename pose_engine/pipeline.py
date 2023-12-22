@@ -45,7 +45,9 @@ class Pipeline:
         self.current_run_start_time: Optional[datetime] = None
         self.current_run_inference_id: Optional[uuid.UUID] = None
 
-        self._init_models()
+        self.pose_estimator = None
+        self.detector = None
+        # self._init_models()
 
     def _load_environment(self):
         df_all_environments = honeycomb_io.fetch_all_environments(
@@ -74,17 +76,19 @@ class Pipeline:
 
     def _init_models(self):
         self.detector = inference.Detector(
-            config=self.detector_model.config,
+            model_config=self.detector_model.model_config,
             checkpoint=self.detector_model.checkpoint,
+            deployment_config=self.detector_model.deployment_config,
             device=self.detector_device,
             use_fp_16=self.use_fp_16,
         )
 
         self.pose_estimator = inference.PoseEstimator(
-            config=self.pose_estimator_model.config,
+            model_config=self.pose_estimator_model.model_config,
             checkpoint=self.pose_estimator_model.checkpoint,
+            deployment_config=self.pose_estimator_model.deployment_config,
             device=self.pose_estimator_device,
-            max_boxes_per_inference=70,
+            max_boxes_per_inference=40,  # 70
             use_fp_16=self.use_fp_16,
         )
 
@@ -112,7 +116,7 @@ class Pipeline:
             dataset=self.bbox_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=60,
+            batch_size=30,  # 60
             pin_memory=True,
         )
 
@@ -123,21 +127,25 @@ class Pipeline:
             dataset=self.poses_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=100,
+            batch_size=50,  # 100
             pin_memory=False,
         )
 
     def _init_processes(self):
         self.detection_process = ProcessDetection(
-            detector=self.detector,
+            # detector=self.detector,
+            detector_model=self.detector_model,
             input_video_frames_loader=self.video_frames_loader,
             output_bbox_dataset=self.bbox_dataset,
+            device=self.detector_device,
         )
 
         self.pose_estimation_process = ProcessPoseEstimation(
-            pose_estimator=self.pose_estimator,
+            # pose_estimator=self.pose_estimator,
+            pose_estimator_model=self.pose_estimator_model,
             input_bboxes_loader=self.bboxes_loader,
             output_poses_dataset=self.poses_dataset,
+            device=self.pose_estimator_device,
         )
 
         self.store_poses_process = ProcessStorePoses(
@@ -148,8 +156,10 @@ class Pipeline:
             video_frame_dataset=self.video_frame_dataset,
             bounding_box_dataset=self.bbox_dataset,
             poses_dataset=self.poses_dataset,
-            detector=self.detector,
-            pose_estimator=self.pose_estimator,
+            # detector=self.detection_process.detector,
+            # pose_estimator=self.pose_estimation_process.pose_estimator,
+            detection_process=self.detection_process,
+            pose_estimation_process=self.pose_estimation_process,
         )
 
     def _fetch_videos(self):
@@ -171,11 +181,13 @@ class Pipeline:
                 self.environment_timezone
             ).strftime("%Y-%m-%d"),
             bounding_box_format=self.detector_model.bounding_box_format_enum,
-            detection_model_config=self.detector_model.config_enum,
+            detection_model_config=self.detector_model.model_config_enum,
             detection_model_checkpoint=self.detector_model.checkpoint_enum,
+            detection_model_deployment_config=self.detector_model.deployment_config_enum,
             keypoints_format=self.pose_estimator_model.keypoint_format_enum,
-            pose_model_config=self.pose_estimator_model.config_enum,
+            pose_model_config=self.pose_estimator_model.model_config_enum,
             pose_model_checkpoint=self.pose_estimator_model.checkpoint_enum,
+            pose_model_deployment_config=self.pose_estimator_model.deployment_config_enum,
         )
 
         self.status_poll_process.start()
@@ -230,5 +242,7 @@ class Pipeline:
         del self.pose_estimation_process
         del self.detection_process
 
-        del self.pose_estimator
-        del self.detector
+        if self.pose_estimator is not None:
+            del self.pose_estimator
+        if self.detector is not None:
+            del self.detector

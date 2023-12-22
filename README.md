@@ -52,6 +52,26 @@ just install
 just run-docker
 ```
 
+### Run TensorRT Model
+
+> Download tar'd tensorrt (8.6.1.6) from Nvidia and uncompress
+
+```
+pip install TensorRT-8.6.1.6/python/tensorrt-8.6.1-cp311-none-linux_x86_64.whl
+```
+
+> Download cudnn (8.9.7.29) from Nvidia and uncompress
+
+#### Setup ENV vars
+
+>Update .env with:
+
+```
+TENSORRT_DIR=<<PATH>>
+CUDNN_DIR=<<PATH>>
+LD_LIBRARY_PATH=$CUDNN_DIR/lib:$LD_LIBRARY_PATH
+```
+
 ## Test
 
 > Test video was generated from ForBiggerFun open source video. Video was cut into 10 second clips at 10 FPS using the following cmds:

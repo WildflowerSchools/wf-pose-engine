@@ -40,3 +40,4 @@ output/
 *.out
 *.log
 sandbox
+checkpoints

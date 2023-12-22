@@ -2,11 +2,16 @@ from contextlib import nullcontext
 from typing import List, Optional, Union
 
 import numpy as np
+import torch
 from torch import nn
 import torch.utils.data
 
+from mmdeploy.apis.utils import build_task_processor
+from mmdeploy.utils import load_config
 from mmengine.dataset import Compose, pseudo_collate
 from mmengine.registry import init_default_scope
+from mmengine.runner import load_checkpoint
+from mmpose.apis.inference import dataset_meta_from_config
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.structures import PoseDataSample
 from mmpose.structures.bbox import bbox_xywh2xyxy
@@ -19,43 +24,75 @@ from pose_engine.log import logger
 class PoseEstimator:
     def __init__(
         self,
-        config: str = None,
+        model_config_path: str = None,
         checkpoint: str = None,
+        deployment_config_path: str = None,
         device: str = "cuda:1",
         max_boxes_per_inference: int = 75,
         use_fp_16: bool = False,
     ):
         logger.info("Initializing pose estimator...")
 
-        if config is None or checkpoint is None:
+        if model_config_path is None or checkpoint is None:
             raise ValueError(
                 "Pose estimator must be initialized by providing a config + checkpoint pair"
             )
 
-        self.config = config
+        self.model_config_path = model_config_path
         self.checkpoint = checkpoint
+        self.deployment_config_path = deployment_config_path
+        self.deployment_config = None
 
         self.max_boxes_per_inference = max_boxes_per_inference
 
         self.use_fp_16 = use_fp_16
 
-        pose_estimator = init_pose_estimator(
-            config=self.config, checkpoint=self.checkpoint, device=device
-        )
-        pose_estimator.share_memory()
+        self.lock = mp.Lock()
 
-        if self.use_fp_16:
-            self.pose_estimator = pose_estimator.half().to(device)
+        self.pose_estimator = None
+        if self.deployment_config_path is None:
+            pose_estimator = init_pose_estimator(
+                config=self.model_config_path, checkpoint=self.checkpoint, device=device
+            )
+            pose_estimator.share_memory()
+
+            if self.use_fp_16:
+                self.pose_estimator = pose_estimator.half().to(device)
+            else:
+                self.pose_estimator = pose_estimator
+
+            self.model_config = pose_estimator.cfg
+
+            logger.info("Compiling pose estimator model...")
+            self.pose_estimator = torch.compile(
+                self.pose_estimator, mode="max-autotune"
+            )
+            logger.info("Finished compiling pose estimator model")
+
         else:
-            self.pose_estimator = pose_estimator
+            self.model_config, self.deployment_config = load_config(
+                self.model_config_path, self.deployment_config_path
+            )
+            task_processor = build_task_processor(
+                model_cfg=self.model_config,
+                deploy_cfg=self.deployment_config,
+                device=device,
+            )
+            self.pose_estimator = task_processor.build_backend_model([self.checkpoint])
 
+        self.pipeline = Compose(self.model_config.test_dataloader.dataset.pipeline)
+
+        self.dataset_meta = dataset_meta_from_config(
+            self.model_config, dataset_mode="train"
+        )
         # TODO: Solve issue with compiled model not being serializable
         # self.pose_estimator = torch.compile(self.pose_estimator)
-
         self._frame_count = mp.Value(
             "i", 0
         )  # Each frame contains multiple boxes, so we track frames separately
         self._inference_count = mp.Value("i", 0)
+
+        logger.info("Finished initializing pose estimator")
 
     @property
     def frame_count(self):
@@ -67,7 +104,6 @@ class PoseEstimator:
 
     def inference_topdown(
         self,
-        model: nn.Module,
         imgs: Union[list[np.ndarray], list[str]],
         bboxes: Optional[Union[List[List], List[np.ndarray]]] = None,
         meta: List[dict] = None,
@@ -90,10 +126,9 @@ class PoseEstimator:
             ``data_sample.pred_instances.keypoints`` and
             ``data_sample.pred_instances.keypoint_scores``.
         """
-        scope = model.cfg.get("default_scope", "mmpose")
+        scope = self.model_config.get("default_scope", "mmpose")
         if scope is not None:
             init_default_scope(scope)
-        pipeline = Compose(model.cfg.test_dataloader.dataset.pipeline)
 
         # construct batch data samples
         data_list = []
@@ -132,8 +167,9 @@ class PoseEstimator:
                     data_info = {"img": img}
                 data_info["bbox"] = bbox[None, :4]  # shape (1, 4)
                 data_info["bbox_score"] = bbox[None, 4]  # shape (1,)
-                data_info.update(model.dataset_meta)
-                data_list.append(pipeline(data_info))
+
+                data_info.update(self.dataset_meta)
+                data_list.append(self.pipeline(data_info))
 
         results = []
         if len(data_list) > 0:
@@ -150,7 +186,7 @@ class PoseEstimator:
 
                 batch = pseudo_collate(sub_data_list)
                 with torch.no_grad():
-                    results.extend(model.test_step(batch))
+                    results.extend(self.pose_estimator.test_step(batch))
 
         for res_idx, _result in enumerate(results):
             results[res_idx].pred_instances["custom_metadata"] = [meta_mapping[res_idx]]
@@ -190,10 +226,15 @@ class PoseEstimator:
 
                 # TODO: Update inference_topdown to work with Tensors
 
+                # self.lock.acquire()
                 with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
                     pose_results = self.inference_topdown(
-                        model=self.pose_estimator, imgs=imgs, bboxes=bboxes, meta=meta
+                        # model=self.pose_estimator,
+                        imgs=imgs,
+                        bboxes=bboxes,
+                        meta=meta,
                     )
+                # self.lock.release()
 
                 if bboxes is not None:
                     for img_idx, img in enumerate(imgs):
@@ -253,4 +294,5 @@ class PoseEstimator:
                 del meta
 
     def __del__(self):
-        del self.pose_estimator
+        if self.pose_estimator is not None:
+            del self.pose_estimator
