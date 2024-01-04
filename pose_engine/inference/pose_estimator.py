@@ -7,7 +7,7 @@ from torch import nn
 import torch.utils.data
 
 from mmdeploy.apis.utils import build_task_processor
-from mmdeploy.utils import load_config
+from mmdeploy.utils import get_input_shape, load_config
 from mmengine.dataset import Compose, pseudo_collate
 from mmengine.registry import init_default_scope
 from mmengine.runner import load_checkpoint
@@ -50,7 +50,10 @@ class PoseEstimator:
         self.lock = mp.Lock()
 
         self.pose_estimator = None
-        if self.deployment_config_path is None:
+        self.task_processor = None
+
+        self.using_tensort = self.deployment_config_path is not None
+        if not self.using_tensort:  # Standard PYTorch
             pose_estimator = init_pose_estimator(
                 config=self.model_config_path, checkpoint=self.checkpoint, device=device
             )
@@ -69,16 +72,18 @@ class PoseEstimator:
             )
             logger.info("Finished compiling pose estimator model")
 
-        else:
+        else:  # TensorRT
             self.model_config, self.deployment_config = load_config(
                 self.model_config_path, self.deployment_config_path
             )
-            task_processor = build_task_processor(
+            self.task_processor = build_task_processor(
                 model_cfg=self.model_config,
                 deploy_cfg=self.deployment_config,
                 device=device,
             )
-            self.pose_estimator = task_processor.build_backend_model([self.checkpoint])
+            self.pose_estimator = self.task_processor.build_backend_model(
+                [self.checkpoint]
+            )
 
         self.pipeline = Compose(self.model_config.test_dataloader.dataset.pipeline)
 
@@ -186,7 +191,28 @@ class PoseEstimator:
 
                 batch = pseudo_collate(sub_data_list)
                 with torch.no_grad():
-                    results.extend(self.pose_estimator.test_step(batch))
+                    if self.using_tensort:
+                        input_shape = get_input_shape(self.deployment_config)
+                        model_inputs, _ = self.task_processor.create_input(
+                            imgs[0], input_shape
+                        )
+                        # When trying to use TensorRT I get an invalid memory access error
+
+                        # Look at context creation in mmdeploy/backend/tensort/wrapper.py, seems like the problem is somewhere in there
+                        # Other ideas: there's a post here about running two tensorrt models at the same time: https://forums.developer.nvidia.com/t/can-i-inference-two-engine-simultaneous-on-jetson-using-tensorrt/64396/3
+                        # Here's one solution which is to share (or maybe separate) contexts: https://forums.developer.nvidia.com/t/unable-to-run-two-tensorrt-models-in-a-cascade-manner/145274/3b
+
+                        # The actual error is raised in the to_numpy call in this file: /home/ben/.cache/pypoetry/virtualenvs/wf-pose-engine-_vUPQedX-py3.11/lib/python3.11/site-packages/mmpose/models/heads/base_head.py
+
+                        # Ultimately, the solution is probably some sort of version mismatch: https://github.com/pytorch/pytorch/issues/21819
+                        # I think I want:
+                        # CUDA 11.8       (current 12.2)
+                        # cuDNN 8.9.0     (current 8.9.7.29_cuda12)
+                        # pytorch 2.1.2   (current 2.1.0)
+                        # tensorRT 8.6.x  (current 8.6.1.6)
+                        results.extend(self.pose_estimator.test_step(model_inputs))
+                    else:
+                        results.extend(self.pose_estimator.test_step(batch))
 
         for res_idx, _result in enumerate(results):
             results[res_idx].pred_instances["custom_metadata"] = [meta_mapping[res_idx]]
@@ -227,7 +253,7 @@ class PoseEstimator:
                 # TODO: Update inference_topdown to work with Tensors
 
                 # self.lock.acquire()
-                with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
+                with torch.cuda.amp.autocast() if self.use_fp_16 and not self.using_tensort else nullcontext():
                     pose_results = self.inference_topdown(
                         # model=self.pose_estimator,
                         imgs=imgs,

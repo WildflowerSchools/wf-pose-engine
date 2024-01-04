@@ -12,9 +12,9 @@ from .pipeline import Pipeline
 
 
 def run(environment: str, start: datetime, end: datetime):
-    detector_model = DetectorModel.rtmdet_medium()
+    # detector_model = DetectorModel.rtmdet_medium()
     pose_model = PoseModel.rtmpose_large_384()
-    # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
+    detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
     # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
 
     process_manager = mp.Manager()
