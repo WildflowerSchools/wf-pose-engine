@@ -1,8 +1,11 @@
 from contextlib import nullcontext
+import time
 from typing import Optional, Union
 
 from mmcv.ops import RoIPool
 from mmcv.transforms import Compose
+from mmdeploy.apis.utils import build_task_processor
+from mmdeploy.utils import load_config
 from mmdet.apis import init_detector
 from mmdet.apis.inference import ImagesType
 from mmdet.structures import DetDataSample, SampleList
@@ -21,8 +24,9 @@ from pose_engine.log import logger
 class Detector:
     def __init__(
         self,
-        config: str = None,
+        model_config_path: str = None,
         checkpoint: str = None,
+        deployment_config_path: str = None,
         device="cpu",
         nms_iou_threshold=0.3,
         bbox_threshold=0.3,
@@ -30,26 +34,57 @@ class Detector:
     ):
         logger.info("Initializing object detector...")
 
-        if config is None or checkpoint is None:
+        if model_config_path is None or checkpoint is None:
             raise ValueError(
                 "Detector must be initialized by providing a config + checkpoint pair"
             )
 
-        self.config = config
+        self.model_config_path = model_config_path
         self.checkpoint = checkpoint
+        self.deployment_config_path = deployment_config_path
+        self.deployment_config = None
 
         self.use_fp_16 = use_fp_16
 
-        detector = init_detector(
-            config=self.config, checkpoint=self.checkpoint, device=device
-        )
-        detector.cfg = adapt_mmdet_pipeline(detector.cfg)
-        detector.share_memory()
+        self.lock = mp.Lock()
 
-        if self.use_fp_16:
-            self.detector = detector.half().to(device)
-        else:
-            self.detector = detector
+        self.using_tensort = self.deployment_config_path is not None
+        if not self.using_tensort:  # Standard PYTorch
+            detector = init_detector(
+                config=self.model_config_path, checkpoint=self.checkpoint, device=device
+            )
+            detector.cfg = adapt_mmdet_pipeline(detector.cfg)
+            detector.share_memory()
+
+            if self.use_fp_16:
+                self.detector = detector.half().to(device)
+            else:
+                self.detector = detector
+
+            self.model_config = detector.cfg
+
+            logger.info("Compiling detector model...")
+            self.detector = torch.compile(self.detector, mode="max-autotune")
+            logger.info("Finished compiling detector model")
+
+        else:  # TensorRT
+            self.model_config, self.deployment_config = load_config(
+                self.model_config_path, self.deployment_config_path
+            )
+            task_processor = build_task_processor(
+                model_cfg=self.model_config,
+                deploy_cfg=self.deployment_config,
+                device=device,
+            )
+            self.detector = task_processor.build_backend_model([self.checkpoint])
+
+        cfg = self.model_config.copy()
+        self.pipeline = get_test_pipeline_cfg(cfg)
+        # if isinstance(imgs[0], np.ndarray):
+        # Calling this method across libraries will result
+        # in module unregistered error if not prefixed with mmdet.
+        self.pipeline[0].type = "mmdet.LoadImageFromNDArray"
+        self.pipeline = Compose(self.pipeline)
 
         # TODO: Solve issue with compiled model not being serializable
         # self.detector = torch.compile(self.detector)
@@ -59,13 +94,15 @@ class Detector:
 
         self._inference_count = mp.Value("i", 0)
 
+        logger.info("Finished initializing detector")
+
     @property
     def inference_count(self):
         return self._inference_count.value
 
     def inference_detector(
         self,
-        model: nn.Module,
+        # model: nn.Module,
         imgs: ImagesType,
         test_pipeline: Optional[Compose] = None,
         text_prompt: Optional[str] = None,
@@ -91,20 +128,8 @@ class Detector:
             imgs = [imgs]
             is_batch = False
 
-        cfg = model.cfg
-
-        if test_pipeline is None:
-            cfg = cfg.copy()
-            test_pipeline = get_test_pipeline_cfg(cfg)
-            if isinstance(imgs[0], np.ndarray):
-                # Calling this method across libraries will result
-                # in module unregistered error if not prefixed with mmdet.
-                test_pipeline[0].type = "mmdet.LoadImageFromNDArray"
-
-            test_pipeline = Compose(test_pipeline)
-
-        if model.data_preprocessor.device.type == "cpu":
-            for m in model.modules():
+        if self.detector.data_preprocessor.device.type == "cpu":
+            for m in self.detector.modules():
                 assert not isinstance(
                     m, RoIPool
                 ), "CPU inference with RoIPool is not supported currently."
@@ -125,7 +150,7 @@ class Detector:
                 data_["custom_entities"] = custom_entities
 
             # build the data pipeline
-            data_ = test_pipeline(data_)
+            data_ = self.pipeline(data_)
             all_inputs.append(data_["inputs"])
             all_data_samples.append(data_["data_samples"])
 
@@ -133,7 +158,11 @@ class Detector:
 
         # forward the model
         with torch.no_grad():
-            result_list = model.test_step(data_)
+            # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
+            # start = time.time()
+            result_list = self.detector.test_step(data_)
+            # end = time.time()
+            # logger.info(f"Detector inference time: {len(imgs)} images in {end - start} seconds")
 
         if not is_batch:
             return result_list[0]
@@ -165,10 +194,13 @@ class Detector:
                     frames.cpu().detach().numpy()
                 )  # Annoying we have to move frames/images to the CPU to run detector
 
+                self.lock.acquire()
                 with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
                     det_results = self.inference_detector(
-                        model=self.detector, imgs=list_np_imgs
+                        # model=self.detector,
+                        imgs=list_np_imgs
                     )
+                self.lock.release()
 
                 self._inference_count.value += len(frames)
 

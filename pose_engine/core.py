@@ -12,8 +12,12 @@ from .pipeline import Pipeline
 
 
 def run(environment: str, start: datetime, end: datetime):
-    detector_model = DetectorModel.rtmdet_medium()
+    # detector_model = DetectorModel.rtmdet_medium()
     pose_model = PoseModel.rtmpose_large_384()
+
+    # TensorRT models
+    detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
+    # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
 
     process_manager = mp.Manager()
 
@@ -23,7 +27,7 @@ def run(environment: str, start: datetime, end: datetime):
         detector_device="cuda:0",
         pose_estimator_model=pose_model,
         pose_estimator_device="cuda:1",
-        use_fp_16=False
+        use_fp_16=True,
     )
     p.run(
         environment=environment,
@@ -99,9 +103,11 @@ def batch():
                 )
             )
             all_existing_inferences.append(df_existing_inferences)
-        
+
     if len(all_existing_inferences) == 0:
-        df_existing_inferences = pd.DataFrame([], columns=["environment_id", "environment_name", "start", "end"])
+        df_existing_inferences = pd.DataFrame(
+            [], columns=["environment_id", "environment_name", "start", "end"]
+        )
     else:
         df_existing_inferences = pd.concat(all_existing_inferences)
 
@@ -112,8 +118,6 @@ def batch():
                 "environment_name"
             ]
         )
-
-    
 
     def merge_batch(_df_batch):
         """
@@ -165,7 +169,7 @@ def batch():
             df_merged_segments = pd.DataFrame(segments).sort_values(by=["start"])
         else:
             df_merged_segments = pd.DataFrame([], columns=_df_batch.columns)
-            
+
         return df_merged_segments
 
     df_existing_merged_segments = merge_batch(df_existing_inferences)
