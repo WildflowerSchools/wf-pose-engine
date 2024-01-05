@@ -157,6 +157,7 @@ class Detector:
 
         # forward the model
         with torch.no_grad():
+            #with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
             # start = time.time()
             result_list = self.detector.test_step(data_)
             # end = time.time()
