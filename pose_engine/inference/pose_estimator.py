@@ -191,7 +191,7 @@ class PoseEstimator:
 
                 batch = pseudo_collate(sub_data_list)
                 with torch.no_grad():
-                    #with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
+                    # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
                     if self.using_tensort:
                         input_shape = get_input_shape(self.deployment_config)
                         model_inputs, _ = self.task_processor.create_input(

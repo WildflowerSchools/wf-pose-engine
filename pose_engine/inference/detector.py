@@ -48,7 +48,8 @@ class Detector:
 
         self.lock = mp.Lock()
 
-        if self.deployment_config_path is None:
+        self.using_tensort = self.deployment_config_path is not None
+        if not self.using_tensort:  # Standard PYTorch
             detector = init_detector(
                 config=self.model_config_path, checkpoint=self.checkpoint, device=device
             )
@@ -66,7 +67,7 @@ class Detector:
             self.detector = torch.compile(self.detector, mode="max-autotune")
             logger.info("Finished compiling detector model")
 
-        else:
+        else:  # TensorRT
             self.model_config, self.deployment_config = load_config(
                 self.model_config_path, self.deployment_config_path
             )
@@ -157,7 +158,7 @@ class Detector:
 
         # forward the model
         with torch.no_grad():
-            #with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
+            # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
             # start = time.time()
             result_list = self.detector.test_step(data_)
             # end = time.time()

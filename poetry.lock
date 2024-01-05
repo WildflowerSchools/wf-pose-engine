@@ -129,17 +129,17 @@ uvloop = ["uvloop (>=0.15.2)"]
 
 [[package]]
 name = "boto3"
-version = "1.34.12"
+version = "1.34.13"
 description = "The AWS SDK for Python"
 optional = false
 python-versions = ">= 3.8"
 files = [
-    {file = "boto3-1.34.12-py3-none-any.whl", hash = "sha256:7d7eac86a2cbdfb8074927119da61884bfa29f3c504717d455371fc0a07c99d8"},
-    {file = "boto3-1.34.12.tar.gz", hash = "sha256:67b763669f9eff10a55fe199875d6e66fda8051647af49f8b9b8fced674d75d7"},
+    {file = "boto3-1.34.13-py3-none-any.whl", hash = "sha256:4c87e2b25a125321394a1bed374293b00bd0e3895e6401a368aa46e1b70df078"},
+    {file = "boto3-1.34.13.tar.gz", hash = "sha256:789f65adc1d2cb8e5d36db782e07a733242ca1bd851263af173b61411e32034b"},
 ]
 
 [package.dependencies]
-botocore = ">=1.34.12,<1.35.0"
+botocore = ">=1.34.13,<1.35.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.10.0,<0.11.0"
 
@@ -148,13 +148,13 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "botocore"
-version = "1.34.12"
+version = "1.34.13"
 description = "Low-level, data-driven core of boto 3."
 optional = false
 python-versions = ">= 3.8"
 files = [
-    {file = "botocore-1.34.12-py3-none-any.whl", hash = "sha256:346b0788f3bf4c68928db909170e4c7300119a22f9a2176bf5f764d3542997e8"},
-    {file = "botocore-1.34.12.tar.gz", hash = "sha256:53dfc19d63f2b70821e9804b7ecfc5e50fc84d9bd6818359b27db629ef43ec59"},
+    {file = "botocore-1.34.13-py3-none-any.whl", hash = "sha256:b39f96e658865bd1f3c2d043794b91cd6206f9db531c0a06b53093ed82d41ef7"},
+    {file = "botocore-1.34.13.tar.gz", hash = "sha256:1680b0e0633a546b8d54d1bbd5154e30bb1044d0496e0df7cfd24a383e10b0d3"},
 ]
 
 [package.dependencies]
@@ -1293,13 +1293,13 @@ tests = ["asynctest", "coverage", "flake8", "interrogate", "isort (==4.3.21)", "
 
 [[package]]
 name = "mmdet"
-version = "3.2.0"
+version = "3.3.0"
 description = "OpenMMLab Detection Toolbox and Benchmark"
 optional = false
 python-versions = "*"
 files = [
-    {file = "mmdet-3.2.0-py3-none-any.whl", hash = "sha256:c64a63fcc93b3c96236964745b4e5515fd0e87ffaf21130816870242c12e59a5"},
-    {file = "mmdet-3.2.0.tar.gz", hash = "sha256:f71481d240cbba8bc6d91f3a195a6517b7559c491c334e57e9888cf99377db3d"},
+    {file = "mmdet-3.3.0-py3-none-any.whl", hash = "sha256:2e23e291281ac57e7dccf8678e957da45fbe560ce78a1f5ded6afeccd3730f17"},
+    {file = "mmdet-3.3.0.tar.gz", hash = "sha256:fe8cc2685d60a2a4f2530a4e92aa6269fe45af93265303a31bf4ea463eb3164f"},
 ]
 
 [package.dependencies]
@@ -1313,11 +1313,11 @@ terminaltables = "*"
 tqdm = "*"
 
 [package.extras]
-all = ["cityscapesscripts", "cython", "fairscale", "imagecorruptions", "matplotlib", "numpy", "pycocotools", "scikit-learn", "scipy", "shapely", "six", "terminaltables", "tqdm"]
+all = ["cityscapesscripts", "cython", "emoji", "fairscale", "imagecorruptions", "matplotlib", "numpy", "pycocotools", "scikit-learn", "scipy", "shapely", "six", "terminaltables", "tqdm"]
 build = ["cython", "numpy"]
 mim = ["mmcv (>=2.0.0rc4,<2.2.0)", "mmengine (>=0.7.1,<1.0.0)"]
-multimodal = ["fairscale", "nltk", "pycocoevalcap", "transformers"]
-optional = ["cityscapesscripts", "fairscale", "imagecorruptions", "scikit-learn"]
+multimodal = ["fairscale", "jsonlines", "nltk", "pycocoevalcap", "transformers"]
+optional = ["cityscapesscripts", "emoji", "fairscale", "imagecorruptions", "scikit-learn"]
 tests = ["asynctest", "cityscapesscripts", "codecov", "flake8", "imagecorruptions", "instaboostfast", "interrogate", "isort (==4.3.21)", "kwarray", "memory-profiler", "mmtrack", "nltk", "onnx (==1.7.0)", "onnxruntime (>=1.8.0)", "parameterized", "prettytable", "protobuf (<=3.20.1)", "psutil", "pytest", "transformers", "ubelt", "xdoctest (>=0.10.0)", "yapf"]
 tracking = ["mmpretrain", "motmetrics", "numpy (<1.24.0)", "scikit-learn", "seaborn"]
 
