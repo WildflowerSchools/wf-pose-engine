@@ -1,15 +1,26 @@
+from typing import Optional, Union
+
 from pose_db_io.handle.models import pose_2d
 
 
 class InferenceModel:
     def __init__(
         self,
-        model_config,
-        model_config_enum,
-        checkpoint,
-        checkpoint_enum,
-        deployment_config=None,
-        deployment_config_enum=None,
+        model_config: str,
+        model_config_enum: Union[
+            pose_2d.DetectorModelConfigEnum, pose_2d.PoseModelConfigEnum
+        ],
+        checkpoint: str,
+        checkpoint_enum: Union[
+            pose_2d.DetectorModelCheckpointEnum, pose_2d.PoseModelCheckpointEnum
+        ],
+        deployment_config: Optional[str] = None,
+        deployment_config_enum: Optional[
+            Union[
+                pose_2d.DetectorModelDeploymentConfigEnum,
+                pose_2d.PoseModelDeploymentConfigEnum,
+            ]
+        ] = None,
     ):
         self.model_config = model_config
         self.model_config_enum = model_config_enum
@@ -20,7 +31,9 @@ class InferenceModel:
 
 
 class DetectorModel(InferenceModel):
-    def __init__(self, *args, bounding_box_format_enum, **kwargs):
+    def __init__(
+        self, *args, bounding_box_format_enum: pose_2d.BoundingBoxFormatEnum, **kwargs
+    ):
         super().__init__(*args, **kwargs)
 
         self.bounding_box_format_enum = bounding_box_format_enum
@@ -71,10 +84,21 @@ class DetectorModel(InferenceModel):
 
 
 class PoseModel(InferenceModel):
-    def __init__(self, *args, keypoint_format_enum, **kwargs):
+    def __init__(
+        self,
+        *args,
+        keypoint_format_enum: pose_2d.KeypointsFormatEnum,
+        pose_estimator_type: pose_2d.PoseEstimatorType,
+        bounding_box_format_enum: Optional[
+            pose_2d.BoundingBoxFormatEnum
+        ] = None,  # BoundingBoxFormatEnum is included here because of one-stage models
+        **kwargs
+    ):
         super().__init__(*args, **kwargs)
 
+        self.bounding_box_format_enum = bounding_box_format_enum
         self.keypoint_format_enum = keypoint_format_enum
+        self.pose_estimator_type = pose_estimator_type
 
     @staticmethod
     def rtmpose_small_256():
@@ -84,6 +108,7 @@ class PoseModel(InferenceModel):
             checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-s_simcc-body7_pt-body7_420e-256x192-acd4a1ef_20230504.pth",
             checkpoint_enum=pose_2d.PoseModelCheckpointEnum.rtmpose_s_simcc_body7_pt_body7_420e_256x192_3f5a1437_20230504,
             keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.top_down,
         )
 
     @staticmethod
@@ -94,6 +119,7 @@ class PoseModel(InferenceModel):
             checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-body7_pt-body7_420e-256x192-e48f03d0_20230504.pth",
             checkpoint_enum=pose_2d.PoseModelCheckpointEnum.rtmpose_m_simcc_body7_pt_body7_420e_256x192_3f5a1437_20230504,
             keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.top_down,
         )
 
     @staticmethod
@@ -104,6 +130,7 @@ class PoseModel(InferenceModel):
             checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-m_simcc-body7_pt-body7_420e-384x288-65e718c4_20230504.pth",
             checkpoint_enum=pose_2d.PoseModelCheckpointEnum.rtmpose_m_simcc_body7_pt_body7_420e_384x288_3f5a1437_20230504,
             keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.top_down,
         )
 
     @staticmethod
@@ -114,6 +141,7 @@ class PoseModel(InferenceModel):
             checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-l_simcc-body7_pt-body7_420e-256x192-4dba18fc_20230504.pth",
             checkpoint_enum=pose_2d.PoseModelCheckpointEnum.rtmpose_l_simcc_body7_pt_body7_420e_256x192_3f5a1437_20230504,
             keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.top_down,
         )
 
     @staticmethod
@@ -124,6 +152,7 @@ class PoseModel(InferenceModel):
             checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/rtmpose-l_simcc-body7_pt-body7_420e-384x288-3f5a1437_20230504.pth",
             checkpoint_enum=pose_2d.PoseModelCheckpointEnum.rtmpose_l_simcc_body7_pt_body7_420e_384x288_3f5a1437_20230504,
             keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.top_down,
         )
 
     @staticmethod
@@ -136,4 +165,17 @@ class PoseModel(InferenceModel):
             deployment_config="./configs/tensorrt/body_2d_keypoint/pose-detection_simcc_tensorrt_dynamic-384x288_batch.py",
             deployment_config_enum=pose_2d.PoseModelDeploymentConfigEnum.tensorrt_simcc_dynamic_384x288_batch,
             keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.top_down,
+        )
+
+    @staticmethod
+    def rtmo_large():
+        return PoseModel(
+            model_config="./configs/body_2d_keypoint/rtmo/body7/rtmo-l_16xb16-600e_body7-640x640.py",
+            model_config_enum=pose_2d.PoseModelConfigEnum.rtmo_l_16xb16_600e_body7_640x640,
+            checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth",
+            checkpoint_enum=pose_2d.PoseModelCheckpointEnum.rtmo_l_16xb16_600e_body7_640x640_b37118ce_20231211,
+            bounding_box_format_enum=pose_2d.BoundingBoxFormatEnum.xyxy,
+            keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.one_stage,
         )

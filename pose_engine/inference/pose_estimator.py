@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+import time
 from typing import List, Optional, Union
 
 import numpy as np
@@ -10,14 +11,18 @@ from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
 from mmengine.dataset import Compose, pseudo_collate
 from mmengine.registry import init_default_scope
-from mmengine.runner import load_checkpoint
-from mmpose.apis.inference import dataset_meta_from_config
 from mmpose.apis import init_model as init_pose_estimator
+from mmpose.apis.inference import dataset_meta_from_config
+from mmpose.evaluation.functional import nearby_joints_nms, nms
+
+# from mmpose.apis.inferencers import MMPoseInferencer
 from mmpose.structures import PoseDataSample
 from mmpose.structures.bbox import bbox_xywh2xyxy
 from PIL import Image
 import torch.multiprocessing as mp
 
+from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
+from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader
 from pose_engine.log import logger
 
 
@@ -28,8 +33,9 @@ class PoseEstimator:
         checkpoint: str = None,
         deployment_config_path: str = None,
         device: str = "cuda:1",
-        max_boxes_per_inference: int = 75,
+        max_objects_per_inference: int = 75,
         use_fp_16: bool = False,
+        run_distributed: bool = False,
     ):
         logger.info("Initializing pose estimator...")
 
@@ -43,8 +49,8 @@ class PoseEstimator:
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
 
-        self.max_boxes_per_inference = max_boxes_per_inference
-
+        self.device = device
+        self.max_objects_per_inference = max_objects_per_inference
         self.use_fp_16 = use_fp_16
 
         self.lock = mp.Lock()
@@ -55,12 +61,14 @@ class PoseEstimator:
         self.using_tensort = self.deployment_config_path is not None
         if not self.using_tensort:  # Standard PYTorch
             pose_estimator = init_pose_estimator(
-                config=self.model_config_path, checkpoint=self.checkpoint, device=device
+                config=self.model_config_path,
+                checkpoint=self.checkpoint,
+                device=self.device,
             )
             pose_estimator.share_memory()
 
             if self.use_fp_16:
-                self.pose_estimator = pose_estimator.half().to(device)
+                self.pose_estimator = pose_estimator.half().to(self.device)
             else:
                 self.pose_estimator = pose_estimator
 
@@ -72,6 +80,12 @@ class PoseEstimator:
             )
             logger.info("Finished compiling pose estimator model")
 
+            if run_distributed:
+                self.pose_estimator = MMLabCompatibleDataParallel(
+                    self.pose_estimator,
+                    device_ids=list(range(torch.cuda.device_count())),
+                )
+
         else:  # TensorRT
             self.model_config, self.deployment_config = load_config(
                 self.model_config_path, self.deployment_config_path
@@ -79,7 +93,7 @@ class PoseEstimator:
             self.task_processor = build_task_processor(
                 model_cfg=self.model_config,
                 deploy_cfg=self.deployment_config,
-                device=device,
+                device=self.device,
             )
             self.pose_estimator = self.task_processor.build_backend_model(
                 [self.checkpoint]
@@ -107,9 +121,10 @@ class PoseEstimator:
     def inference_count(self):
         return self._inference_count.value
 
-    def inference_topdown(
+    def inference(
         self,
         imgs: Union[list[np.ndarray], list[str]],
+        inference_type: str = "topdown",
         bboxes: Optional[Union[List[List], List[np.ndarray]]] = None,
         meta: List[dict] = None,
         bbox_format: str = "xyxy",
@@ -138,55 +153,71 @@ class PoseEstimator:
         # construct batch data samples
         data_list = []
         meta_mapping = []
+        total_pre_processing_time = 0
         for img_idx, img in enumerate(imgs):
-            img_bboxes = bboxes[img_idx]
-            if img_bboxes is None:
-                # get bbox from the image size
-                if isinstance(img, str):
-                    w, h = Image.open(img).size
-                else:
-                    h, w = img.shape[:2]
+            if inference_type == "topdown":
+                img_bboxes = bboxes[img_idx]
+                if img_bboxes is None:
+                    # get bbox from the image size
+                    if isinstance(img, str):
+                        w, h = Image.open(img).size
+                    else:
+                        h, w = img.shape[:2]
 
-                img_bboxes = np.array([[0, 0, w, h, 1]], dtype=np.float32)
-            elif len(img_bboxes) == 0:
-                continue
+                    img_bboxes = np.array([[0, 0, w, h, 1]], dtype=np.float32)
+                elif len(img_bboxes) == 0:
+                    continue
+                else:
+                    if isinstance(img_bboxes, list):
+                        img_bboxes = np.array(img_bboxes)
+
+                    assert bbox_format in {
+                        "xyxy",
+                        "xywh",
+                    }, f'Invalid bbox_format "{bbox_format}".'
+
+                    if bbox_format == "xywh":
+                        img_bboxes = bbox_xywh2xyxy(img_bboxes)
+
+                for bbox in img_bboxes:
+                    meta_mapping.append(meta[img_idx])
+
+                    if isinstance(img, str):
+                        data_info = {"img_path": img}
+                    else:
+                        data_info = {"img": img}
+                    data_info["bbox"] = bbox[None, :4]  # shape (1, 4)
+                    data_info["bbox_score"] = bbox[None, 4]  # shape (1,)
             else:
-                if isinstance(img_bboxes, list):
-                    img_bboxes = np.array(img_bboxes)
+                meta_item = {}
+                for key in meta.keys():
+                    meta_item[key] = meta[key][img_idx]
 
-                assert bbox_format in {
-                    "xyxy",
-                    "xywh",
-                }, f'Invalid bbox_format "{bbox_format}".'
+                meta_mapping.append(meta_item)
+                data_info = {"img": img}
 
-                if bbox_format == "xywh":
-                    img_bboxes = bbox_xywh2xyxy(img_bboxes)
+            data_info.update(self.dataset_meta)
+            s = time.time()
+            processed_pipeline_data = self.pipeline(data_info)
+            total_pre_processing_time += time.time() - s
 
-            for bbox in img_bboxes:
-                # meta_mapping.extend([meta[img_idx]] * len(img_bboxes))
-                meta_mapping.append(meta[img_idx])
+            data_list.append(processed_pipeline_data)
 
-                if isinstance(img, str):
-                    data_info = {"img_path": img}
-                else:
-                    data_info = {"img": img}
-                data_info["bbox"] = bbox[None, :4]  # shape (1, 4)
-                data_info["bbox_score"] = bbox[None, 4]  # shape (1,)
-
-                data_info.update(self.dataset_meta)
-                data_list.append(self.pipeline(data_info))
+        logger.info(
+            f"Pose estimator data pipeline pre-processing time: {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {round(len(data_list) / total_pre_processing_time, 2)} records/second"
+        )
 
         results = []
         if len(data_list) > 0:
             # collate data list into a batch, which is a dict with following keys:
             # batch['inputs']: a list of input images
             # batch['data_samples']: a list of :obj:`PoseDataSample`
-            chunk_size = self.max_boxes_per_inference
+            chunk_size = self.max_objects_per_inference
             for chunk_ii in range(0, len(data_list), chunk_size):
                 sub_data_list = data_list[chunk_ii : chunk_ii + chunk_size]
 
                 logger.debug(
-                    f"Running pose estimation against {len(sub_data_list)} data samples"
+                    f"Running pose estimation against {len(sub_data_list)} data samples..."
                 )
 
                 batch = pseudo_collate(sub_data_list)
@@ -211,12 +242,22 @@ class PoseEstimator:
                         # cuDNN 8.9.0     (current 8.9.7.29_cuda12)
                         # pytorch 2.1.2   (current 2.1.0)
                         # tensorRT 8.6.x  (current 8.6.1.6)
-                        results.extend(self.pose_estimator.test_step(model_inputs))
+                        inference_results = self.pose_estimator.test_step(model_inputs)
                     else:
-                        results.extend(self.pose_estimator.test_step(batch))
+                        # s = time.time()
+                        # batch['inputs'] = list(map(lambda img_tensor: img_tensor.to(self.device), batch['inputs']))
+                        # logger.info(f"Pose estimator pre-processing, move image tensors to GPU timing: {round(time.time() - s, 2)}")
+
+                        s = time.time()
+                        inference_results = self.pose_estimator.test_step(batch)
+
+                    logger.info(
+                        f"Pose estimator inference performance: {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
+                    )
+                    results.extend(inference_results)
 
         for res_idx, _result in enumerate(results):
-            results[res_idx].pred_instances["custom_metadata"] = [meta_mapping[res_idx]]
+            _result.set_field(name="custom_metadata", value=meta_mapping[res_idx])
 
         return results
 
@@ -228,14 +269,27 @@ class PoseEstimator:
         :returns: a generator of tuples (poses, meta)
         :rtype: generator
         """
-        for batch_idx, (bboxes, frames, meta) in enumerate(loader):
+
+        is_topdown = False
+
+        for batch_idx, data in enumerate(loader):
+            if type(loader) == BoundingBoxesDataLoader:
+                is_topdown = True
+                (bboxes, frames, meta) = data
+            elif type(loader) == VideoFramesDataLoader:
+                bboxes = None
+                (frames, meta) = data
+            else:
+                raise ValueError(
+                    f"Unknown dataloader ({type(loader)}) provided to PoseEstimator, accepted loaders are any of [BoundingBoxesDataLoader, VideoFramesDataLoader]"
+                )
+
             try:
                 self._frame_count.value += len(frames)
 
-                logger.debug(
+                logger.info(
                     f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
                 )
-                # meta_mapping = []
                 imgs = []
                 for img_idx, img in enumerate(frames):
                     if isinstance(img, torch.Tensor):
@@ -243,78 +297,118 @@ class PoseEstimator:
 
                     imgs.append(img)
 
-                    # if bboxes is None or len(bboxes[idx]) == 0:
-                    #     meta_mapping.extend([meta])
-                    # else:
-                    #     meta_mapping.extend([meta] * len(bboxes[img_idx]))
-
                     if bboxes is not None and isinstance(bboxes[img_idx], torch.Tensor):
                         bboxes[img_idx] = bboxes[img_idx].detach().cpu().numpy()
 
                 # TODO: Update inference_topdown to work with Tensors
 
-                # self.lock.acquire()
                 with torch.cuda.amp.autocast() if self.use_fp_16 and not self.using_tensort else nullcontext():
-                    pose_results = self.inference_topdown(
-                        # model=self.pose_estimator,
+                    inference_type = "topdown" if is_topdown else "onestage"
+                    pose_results = self.inference(
+                        inference_type=inference_type,
                         imgs=imgs,
                         bboxes=bboxes,
                         meta=meta,
                     )
-                # self.lock.release()
 
-                if bboxes is not None:
+                if is_topdown:
                     for img_idx, img in enumerate(imgs):
                         self._inference_count.value += len(bboxes[img_idx])
+                else:
+                    if pose_results and len(pose_results) > 0:
+                        s = time.time()
+
+                        for pose_result in pose_results:
+                            if len(pose_result.pred_instances) == 0:
+                                continue
+
+                            pose_result_keypoints = pose_result.pred_instances.get(
+                                "keypoints"
+                            )
+                            pose_result_scores = pose_result.pred_instances.get(
+                                "bbox_scores"
+                            )
+                            num_keypoints = pose_result_keypoints.shape[-2]
+
+                            prediction_indicies = nearby_joints_nms(
+                                [
+                                    dict(
+                                        keypoints=pose_result_keypoints[i],
+                                        score=pose_result_scores[i],
+                                    )
+                                    for i in range(len(pose_result_keypoints))
+                                ],
+                                num_nearby_joints_thr=num_keypoints // 3,
+                            )
+                            pose_result.pred_instances = pose_result.pred_instances[
+                                prediction_indicies
+                            ]
+
+                            pose_result_bboxes = pose_result.pred_instances.get(
+                                "bboxes"
+                            )
+                            self._inference_count.value += len(pose_result_bboxes)
+
+                        logger.info(
+                            f"Pose estimator pose-processing nearby_joints_nms: {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
+                        )
 
                 # data_samples = merge_data_samples(pose_results)
 
                 if pose_results and len(pose_results) > 0:
                     for idx, pose_result in enumerate(pose_results):
-                        if pose_result is None:
+                        if pose_result is None or len(pose_result.pred_instances) == 0:
                             continue
 
-                        pose_result_keypoints = pose_result.pred_instances["keypoints"][
-                            0
-                        ]
-                        pose_result_keypoint_visible = pose_result.pred_instances[
-                            "keypoints_visible"
-                        ][0]
-                        pose_result_keypoint_scores = pose_result.pred_instances[
-                            "keypoint_scores"
-                        ][0]
-                        pose_result_bboxes = pose_result.pred_instances["bboxes"][0]
-                        pose_result_bbox_scores = pose_result.pred_instances[
-                            "bbox_scores"
-                        ][0]
-                        pose_result_metadata = pose_result.pred_instances[
-                            "custom_metadata"
-                        ][0]
-
-                        pose_prediction = np.concatenate(
-                            (
-                                pose_result_keypoints,  # 0, 1 = X, Y,
-                                np.full_like(
-                                    np.expand_dims(
-                                        pose_result_keypoint_visible, axis=1
-                                    ),
-                                    -1,
-                                ),  # 2 = visibility - mmPose doesn't produce actual visibility values, it simply duplicates scores. For now default the value to -1.
-                                np.expand_dims(
-                                    pose_result_keypoint_scores, axis=1
-                                ),  # 3 = confidence
-                            ),
-                            axis=1,
-                        )
-                        box_prediction = np.concatenate(
-                            (
-                                pose_result_bboxes,  # 0, 1, 2, 3 = X1, Y1, X2, Y2
-                                np.expand_dims(
-                                    pose_result_bbox_scores, axis=0
-                                ),  # 5 = confidence
+                        for pred_instance_idx in range(len(pose_result.pred_instances)):
+                            pose_result_keypoints = (
+                                pose_result.pred_instances.keypoints[pred_instance_idx]
                             )
-                        )
-                        yield pose_prediction, box_prediction, pose_result_metadata
+                            pose_result_keypoint_visible = (
+                                pose_result.pred_instances.keypoints_visible[
+                                    pred_instance_idx
+                                ]
+                            )
+                            pose_result_keypoint_scores = (
+                                pose_result.pred_instances.keypoint_scores[
+                                    pred_instance_idx
+                                ]
+                            )
+                            pose_result_bboxes = pose_result.pred_instances.bboxes[
+                                pred_instance_idx
+                            ]
+                            pose_result_bbox_scores = (
+                                pose_result.pred_instances.bbox_scores[
+                                    pred_instance_idx
+                                ]
+                            )
+
+                            pose_result_metadata = pose_result.get("custom_metadata")
+
+                            pose_prediction = np.concatenate(
+                                (
+                                    pose_result_keypoints,  # 0, 1 = X, Y,
+                                    np.full_like(
+                                        np.expand_dims(
+                                            pose_result_keypoint_visible, axis=1
+                                        ),
+                                        -1,
+                                    ),  # 2 = visibility - mmPose doesn't produce actual visibility values, it simply duplicates scores. For now default the value to -1.
+                                    np.expand_dims(
+                                        pose_result_keypoint_scores, axis=1
+                                    ),  # 3 = confidence
+                                ),
+                                axis=1,
+                            )
+                            box_prediction = np.concatenate(
+                                (
+                                    pose_result_bboxes,  # 0, 1, 2, 3 = X1, Y1, X2, Y2
+                                    np.expand_dims(
+                                        pose_result_bbox_scores, axis=0
+                                    ),  # 5 = confidence
+                                )
+                            )
+                            yield pose_prediction, box_prediction, pose_result_metadata
             finally:
                 del bboxes
                 del frames

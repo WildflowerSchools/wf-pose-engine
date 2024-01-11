@@ -184,11 +184,11 @@ class Detector:
                 )
                 meta_as_list_of_dicts = []
                 for idx in range(len(frames)):
-                    meta_list_item = {}
+                    meta_item = {}
                     for key in meta.keys():
-                        meta_list_item[key] = meta[key][idx]
+                        meta_item[key] = meta[key][idx]
 
-                    meta_as_list_of_dicts.append(meta_list_item)
+                    meta_as_list_of_dicts.append(meta_item)
 
                 list_np_imgs = list(
                     frames.cpu().detach().numpy()

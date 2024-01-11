@@ -19,6 +19,10 @@ def run(environment: str, start: datetime, end: datetime):
     detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
     # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
 
+    # Single pass pose model
+    # detector_model = None
+    # pose_model = PoseModel.rtmo_large()
+
     process_manager = mp.Manager()
 
     p = Pipeline(

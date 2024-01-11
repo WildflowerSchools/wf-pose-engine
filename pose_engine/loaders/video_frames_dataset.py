@@ -1,3 +1,4 @@
+from ctypes import c_bool
 from datetime import datetime, timedelta
 from threading import Thread
 import time
@@ -44,11 +45,13 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
             mp_manager = mp.Manager()
         self.video_frame_queue = mp_manager.Queue(maxsize=frame_queue_maxsize)
 
-        self.video_loader_thread_stopped = False
+        self.video_loader_lock = mp.Lock()
+        self._video_loader_thread_stopped = mp.Value(c_bool, False)
+        self._video_loader_thread_initialized = mp.Value(c_bool, False)
         self.video_loader_thread = None
 
-    def add_video_object(self, video_object):
-        self.video_object_queue.put(video_object)
+    def add_data_object(self, data_object):
+        self.video_object_queue.put(data_object)
         self._total_video_files_queued.value += 1
 
     def size(self):
@@ -63,22 +66,39 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
     def total_video_frames_queued(self):
         return self._total_video_frames_queued.value
 
+    def video_loader_thread_stopped(self):
+        return self._video_loader_thread_stopped.value
+
+    def video_loader_thread_initialized(self):
+        return self._video_loader_thread_initialized.value
+
     def _start_video_loader(self):
         time.sleep(1)  # Hacky, but whatever
 
-        while not self.video_loader_thread_stopped:
+        ii = 0
+
+        while not self.video_loader_thread_stopped():
+            ii += 1
+
+            if ii > 10:
+                self._video_loader_thread_stopped.value = True
+
             try:
                 video_object = self.video_object_queue.get(block=False)
                 video_path = video_object["video_local_path"]
 
-                logger.info(f"Loading frames from {video_path}...")
+                logger.info(
+                    f"Loading frames from {video_path}... (Queue size: {self.size()}, Total queued: {self.total_video_frames_queued()})"
+                )
                 video_reader = VideoInput(input_path=video_path, queue_frames=False)
 
                 frame_idx = 0
                 while True:
                     frame = video_reader.get_frame()
                     if frame is None:
-                        logger.info(f"Exhausted all frames in {video_path}")
+                        logger.info(
+                            f"Exhausted all frames in {video_path} (Queue size: {self.size()}, Total queued: {self.total_video_frames_queued()})"
+                        )
                         break
 
                     frame_idx += 1
@@ -101,7 +121,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                             continue
 
                     frame_written = False
-                    while not frame_written and not self.video_loader_thread_stopped:
+                    while not frame_written and not self.video_loader_thread_stopped():
                         try:
                             logger.debug(
                                 f"Putting '{video_path}' frame index {frame_idx} on frame queue"
@@ -119,6 +139,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                                 ),
                                 timeout=0.5,
                             )
+                            # logger.info(f"Video frame queue size (after put action): {self.size()}")
                             self._total_video_frames_queued.value += 1
                             frame_written = True
                         except queue.Full:
@@ -131,13 +152,15 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                     )
                 self.video_object_queue.task_done()
 
-                logger.info(f"Finished loading frames from {video_path}")
+                logger.info(
+                    f"Finished loading frames from {video_path} (Queue size: {self.size()}, Total queued: {self.total_video_frames_queued()})"
+                )
             except queue.Empty:
                 if not self.wait_for_video_files:
                     logger.info(
                         "Video file queue empty and wait_for_video_files set to False, killing video loader"
                     )
-                    self.video_loader_thread_stopped = True
+                    self._video_loader_thread_stopped.value = True
 
                 logger.debug("Video file queue empty, sleeping for 1 second")
                 time.sleep(1)
@@ -148,9 +171,14 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         )
 
     def __iter__(self):
-        self.video_loader_thread = Thread(target=self._start_video_loader, args=())
-        self.video_loader_thread.daemon = True
-        self.video_loader_thread.start()
+        self.video_loader_lock.acquire()
+        if not self.video_loader_thread_initialized():
+            self.video_loader_thread = Thread(target=self._start_video_loader, args=())
+            self.video_loader_thread.daemon = True
+            self.video_loader_thread.start()
+
+            self._video_loader_thread_initialized.value = True
+        self.video_loader_lock.release()
 
         while True:
             try:
@@ -166,7 +194,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                         )
                         break
 
-                    if self.video_loader_thread_stopped:
+                    if self.video_loader_thread_stopped():
                         logger.info(
                             "Video loader is terminated and no more items in the frame queue, terminating iterator"
                         )
@@ -178,9 +206,11 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
 
     def stop_video_loader(self):
         if self.video_loader_thread is not None:
-            self.video_loader_thread_stopped = True
+            self._video_loader_thread_stopped.value = True
             self.video_loader_thread.join()
             self.video_loader_thread
+
+            self._video_loader_thread_initialized.value = False
 
     def cleanup(self):
         try:

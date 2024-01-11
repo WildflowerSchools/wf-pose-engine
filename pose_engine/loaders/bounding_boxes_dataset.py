@@ -27,8 +27,8 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
 
         self.bbox_queue = mp_manager.Queue(maxsize=bbox_queue_maxsize)
 
-    def add_bboxes(self, bbox_records):
-        (bboxes, frame, meta) = bbox_records
+    def add_data_object(self, data_object):
+        (bboxes, frame, meta) = data_object
 
         move_to_numpy = True  # TODO: Figure out whey I can't share tensors across processes. Unless I move tensors to the CPU, I get the error "RuntimeError: Attempted to send CUDA tensor received from another process; this is not currently supported. Consider cloning before sending."
         if move_to_numpy:
