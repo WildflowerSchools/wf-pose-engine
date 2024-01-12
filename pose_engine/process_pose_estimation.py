@@ -2,6 +2,8 @@ from typing import Optional, Union
 
 import torch.multiprocessing as mp
 
+from pose_db_io.handle.models import pose_2d
+
 from . import inference
 from .known_inference_models import PoseModel
 from .log import logger
@@ -38,14 +40,35 @@ class ProcessPoseEstimation:
             "i", 0
         )  # Each frame contains multiple boxes, so we track frames separately
         self._inference_count = mp.Value("i", 0)
+        self._processing_start_time = mp.Value("d", -1.0)
+        self._first_inference_time = mp.Value("d", -1.0)
+        self._time_waiting = mp.Value("d", 0)
 
     @property
-    def frame_count(self):
+    def frame_count(self) -> int:
         return self._frame_count.value
 
     @property
-    def inference_count(self):
+    def inference_count(self) -> int:
         return self._inference_count.value
+
+    @property
+    def processing_start_time(self) -> float:
+        return self._processing_start_time.value
+
+    @property
+    def first_inference_time(self) -> float:
+        return self._first_inference_time.value
+
+    @property
+    def time_waiting(self) -> int:
+        return self._time_waiting.value
+
+    def is_topdown(self):
+        return (
+            self.pose_estimator_model.pose_estimator_type
+            == pose_2d.PoseEstimatorType.top_down
+        )
 
     def add_data_objects(self, data_objects=None):
         if data_objects is None:
@@ -86,9 +109,14 @@ class ProcessPoseEstimation:
             )
 
             for pose_tuple in pose_estimator.iter_dataloader(loader=self.data_loader):
-                self.output_poses_dataset.add_data_object(pose_tuple)
                 self._frame_count.value = pose_estimator.frame_count
                 self._inference_count.value = pose_estimator.inference_count
+                self._processing_start_time.value = pose_estimator.processing_start_time
+                self._first_inference_time.value = pose_estimator.first_inference_time
+                self._time_waiting.value = pose_estimator.time_waiting
+
+                self.output_poses_dataset.add_data_object(pose_tuple)
+
         except Exception as e:
             logger.error(e)
             raise e

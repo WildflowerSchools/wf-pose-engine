@@ -83,7 +83,7 @@ class Pipeline:
 
     def _init_dataloaders(self):
         self.video_frame_dataset = loaders.VideoFramesDataset(
-            frame_queue_maxsize=200,
+            frame_queue_maxsize=300,
             wait_for_video_files=False,
             mp_manager=self.mp_manager,
             filter_min_datetime=self.start_datetime,
@@ -94,7 +94,7 @@ class Pipeline:
             device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
             shuffle=False,
             num_workers=1,
-            batch_size=100,
+            batch_size=300,
             pin_memory=True,
         )
 
@@ -110,13 +110,13 @@ class Pipeline:
         )
 
         self.poses_dataset = loaders.PosesDataset(
-            pose_queue_maxsize=180, wait_for_poses=True, mp_manager=self.mp_manager
+            pose_queue_maxsize=300, wait_for_poses=True, mp_manager=self.mp_manager
         )
         self.poses_loader = loaders.PosesDataLoader(
             dataset=self.poses_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=60,
+            batch_size=100,
             pin_memory=True,
         )
 
@@ -149,7 +149,7 @@ class Pipeline:
             device=self.pose_estimator_device,
             use_fp_16=self.use_fp_16,
             run_distributed=run_distributed,
-            max_objects_per_inference=100,
+            max_objects_per_inference=220,
         )
 
         self.store_poses_process = ProcessStorePoses(
@@ -234,11 +234,6 @@ class Pipeline:
             self.pose_estimation_process.mark_detector_drained()
 
         self.pose_estimation_process.wait()
-
-        total_time = time.time() - self.current_run_start_time
-        logger.info(
-            f"Finished running pose estimation ({total_time:.3f} seconds - {self.video_frames_loader.total_video_frames_queued() / total_time} fps)"
-        )
 
         self.store_poses_process.mark_poses_drained()
         self.store_poses_process.wait()

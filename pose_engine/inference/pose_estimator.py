@@ -36,6 +36,7 @@ class PoseEstimator:
         max_objects_per_inference: int = 75,
         use_fp_16: bool = False,
         run_distributed: bool = False,
+        compile_model: bool = False,
     ):
         logger.info("Initializing pose estimator...")
 
@@ -52,6 +53,7 @@ class PoseEstimator:
         self.device = device
         self.max_objects_per_inference = max_objects_per_inference
         self.use_fp_16 = use_fp_16
+        self.compile_model = compile_model
 
         self.lock = mp.Lock()
 
@@ -74,13 +76,14 @@ class PoseEstimator:
 
             self.model_config = pose_estimator.cfg
 
-            logger.info("Compiling pose estimator model...")
-            self.pose_estimator = torch.compile(
-                self.pose_estimator, mode="max-autotune"
-            )
-            logger.info("Finished compiling pose estimator model")
+            if self.compile_model:
+                logger.info("Compiling pose estimator model...")
+                self.pose_estimator = torch.compile(
+                    self.pose_estimator, mode="max-autotune"
+                )
+                logger.info("Finished compiling pose estimator model")
 
-            if run_distributed:
+            if run_distributed:  # TODO: Figure out distributed data processing
                 self.pose_estimator = MMLabCompatibleDataParallel(
                     self.pose_estimator,
                     device_ids=list(range(torch.cuda.device_count())),
@@ -110,16 +113,31 @@ class PoseEstimator:
             "i", 0
         )  # Each frame contains multiple boxes, so we track frames separately
         self._inference_count = mp.Value("i", 0)
+        self._processing_start_time = mp.Value("d", -1.0)
+        self._first_inference_time = mp.Value("d", -1.0)
+        self._time_waiting = mp.Value("d", 0)
 
         logger.info("Finished initializing pose estimator")
 
     @property
-    def frame_count(self):
+    def frame_count(self) -> int:
         return self._frame_count.value
 
     @property
-    def inference_count(self):
+    def inference_count(self) -> int:
         return self._inference_count.value
+
+    @property
+    def processing_start_time(self) -> float:
+        return self._processing_start_time.value
+
+    @property
+    def first_inference_time(self) -> float:
+        return self._first_inference_time.value
+
+    @property
+    def time_waiting(self) -> int:
+        return self._time_waiting.value
 
     def inference(
         self,
@@ -272,7 +290,15 @@ class PoseEstimator:
 
         is_topdown = False
 
+        last_loop_start_time = time.time()
+        self._processing_start_time.value = last_loop_start_time
         for batch_idx, data in enumerate(loader):
+            current_loop_time = time.time()
+            self._time_waiting.value += current_loop_time - last_loop_start_time
+
+            if self._first_inference_time.value == -1:
+                self._first_inference_time.value = current_loop_time
+
             if type(loader) == BoundingBoxesDataLoader:
                 is_topdown = True
                 (bboxes, frames, meta) = data
@@ -413,6 +439,8 @@ class PoseEstimator:
                 del bboxes
                 del frames
                 del meta
+
+            last_loop_start_time = time.time()
 
     def __del__(self):
         if self.pose_estimator is not None:

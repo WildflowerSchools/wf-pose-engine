@@ -13,15 +13,16 @@ from .pipeline import Pipeline
 
 def run(environment: str, start: datetime, end: datetime):
     # detector_model = DetectorModel.rtmdet_medium()
-    pose_model = PoseModel.rtmpose_large_384()
+    # pose_model = PoseModel.rtmpose_large_384()
 
     # TensorRT models
-    detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
+    # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
     # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
 
     # Single pass pose model
-    # detector_model = None
+    detector_model = None
     # pose_model = PoseModel.rtmo_large()
+    pose_model = PoseModel.rtmo_medium()
 
     process_manager = mp.Manager()
 
@@ -30,7 +31,7 @@ def run(environment: str, start: datetime, end: datetime):
         detector_model=detector_model,
         detector_device="cuda:0",
         pose_estimator_model=pose_model,
-        pose_estimator_device="cuda:1",
+        pose_estimator_device="cuda:0",
         use_fp_16=True,
     )
     p.run(

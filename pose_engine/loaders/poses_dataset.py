@@ -1,5 +1,6 @@
 from ctypes import c_bool
 import queue
+import time
 
 import torch
 import torch.multiprocessing as mp
@@ -21,6 +22,8 @@ class PosesDataset(torch.utils.data.IterableDataset):
 
         self.pose_queue_maxsize = pose_queue_maxsize
         self.wait_for_poses = wait_for_poses
+
+        self._queue_wait_time = mp.Value("d", 0)
 
         if mp_manager is None:
             mp_manager = mp.Manager()
@@ -57,6 +60,9 @@ class PosesDataset(torch.utils.data.IterableDataset):
 
             self.pose_queue.put((pose, bbox, meta))
 
+    def queue_wait_time(self):
+        return self._queue_wait_time.value
+
     def size(self):
         return self.pose_queue.qsize()
 
@@ -73,11 +79,16 @@ class PosesDataset(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         while True:
+            start_wait = time.time()
+
             try:
                 pose, bbox, meta = self.pose_queue.get(block=False, timeout=0.5)
                 if pose is not None:
                     yield (pose, bbox, meta)
             except queue.Empty:
+                end_wait = time.time() - start_wait
+                self._queue_wait_time.value += end_wait
+
                 # DO NOT REMOVE: the "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.pose_queue.qsize() == 0:
                     if not self.wait_for_poses:

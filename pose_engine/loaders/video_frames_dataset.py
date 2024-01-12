@@ -34,6 +34,8 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self.filter_min_datetime = filter_min_datetime
         self.filter_max_datetime = filter_max_datetime
 
+        self._queue_wait_time = mp.Value("d", 0)
+
         self._total_video_files_queued = mp.Value("i", 0)
         self._total_video_frames_queued = mp.Value("i", 0)
 
@@ -59,6 +61,9 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
 
     def maxsize(self):
         return self.frame_queue_maxsize
+
+    def queue_wait_time(self):
+        return self._queue_wait_time.value
 
     def total_video_files_queued(self):
         return self._total_video_files_queued.value
@@ -181,11 +186,16 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self.video_loader_lock.release()
 
         while True:
+            start_wait = time.time()
+
             try:
                 frame, meta = self.video_frame_queue.get(block=False, timeout=0.5)
                 if frame is not None:
                     yield (frame, meta)
             except queue.Empty:
+                end_wait = time.time() - start_wait
+                self._queue_wait_time.value += end_wait
+
                 # DO NOT REMOVE: the "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.video_frame_queue.qsize() == 0:
                     if not self.wait_for_video_frames:

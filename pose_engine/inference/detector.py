@@ -93,12 +93,27 @@ class Detector:
         self.bbox_threshold = bbox_threshold
 
         self._inference_count = mp.Value("i", 0)
+        self._processing_start_time = mp.Value("d", -1.0)
+        self._first_inference_time = mp.Value("d", -1.0)
+        self._time_waiting = mp.Value("d", 0)
 
         logger.info("Finished initializing detector")
 
     @property
-    def inference_count(self):
+    def inference_count(self) -> int:
         return self._inference_count.value
+
+    @property
+    def processing_start_time(self) -> float:
+        return self._processing_start_time.value
+
+    @property
+    def first_inference_time(self) -> float:
+        return self._first_inference_time.value
+
+    @property
+    def time_waiting(self) -> int:
+        return self._time_waiting.value
 
     def inference_detector(
         self,
@@ -177,7 +192,15 @@ class Detector:
         :returns: a generator of tuples (bboxes, frame, meta)
         :rtype: generator
         """
+        last_loop_start_time = time.time()
+        self._processing_start_time.value = last_loop_start_time
         for batch_idx, (frames, meta) in enumerate(loader):
+            current_loop_time = time.time()
+            self._time_waiting.value += current_loop_time - last_loop_start_time
+
+            if self._first_inference_time.value == -1:
+                self._first_inference_time.value = current_loop_time
+
             try:
                 logger.debug(
                     f"Processing detector batch #{batch_idx} - Includes {len(frames)} frames"
@@ -246,6 +269,8 @@ class Detector:
             finally:
                 del meta
                 del frames
+
+            last_loop_start_time = time.time()
 
     def __del__(self):
         del self.detector

@@ -1,4 +1,5 @@
 from ctypes import c_bool
+import time
 import queue
 
 import torch
@@ -21,6 +22,8 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
 
         self.bbox_queue_maxsize = bbox_queue_maxsize
         self.wait_for_bboxes = wait_for_bboxes
+
+        self._queue_wait_time = mp.Value("d", 0)
 
         if mp_manager is None:
             mp_manager = mp.Manager()
@@ -47,6 +50,9 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
                 (bboxes.clone().share_memory_(), frame.clone().share_memory_(), meta)
             )
 
+    def queue_wait_time(self):
+        return self._queue_wait_time.value
+
     def size(self):
         return self.bbox_queue.qsize()
 
@@ -63,11 +69,16 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         while True:
+            start_wait = time.time()
+
             try:
                 bboxes, images, meta = self.bbox_queue.get(block=False, timeout=0.5)
                 if bboxes is not None:
                     yield (bboxes, images, meta)
             except queue.Empty:
+                end_wait = time.time() - start_wait
+                self._queue_wait_time.value += end_wait
+
                 # DO NOT REMOVE: the "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.bbox_queue.qsize() == 0:
                     if not self.wait_for_bboxes:

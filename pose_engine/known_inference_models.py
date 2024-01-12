@@ -179,3 +179,15 @@ class PoseModel(InferenceModel):
             keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
             pose_estimator_type=pose_2d.PoseEstimatorType.one_stage,
         )
+
+    @staticmethod
+    def rtmo_medium():
+        return PoseModel(
+            model_config="./configs/body_2d_keypoint/rtmo/body7/rtmo-m_16xb16-600e_body7-640x640.py",
+            model_config_enum=pose_2d.PoseModelConfigEnum.rtmo_m_16xb16_600e_body7_640x640,
+            checkpoint="https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-m_16xb16-600e_body7-640x640-39e78cc4_20231211.pth",
+            checkpoint_enum=pose_2d.PoseModelCheckpointEnum.rtmo_m_16xb16_600e_body7_640x640_39e78cc4_20231211,
+            bounding_box_format_enum=pose_2d.BoundingBoxFormatEnum.xyxy,
+            keypoint_format_enum=pose_2d.KeypointsFormatEnum.coco_17,
+            pose_estimator_type=pose_2d.PoseEstimatorType.one_stage,
+        )
