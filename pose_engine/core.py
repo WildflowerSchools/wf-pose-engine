@@ -17,6 +17,7 @@ def run(environment: str, start: datetime, end: datetime):
 
     # TensorRT models
     # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
+    # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_fp16_batch()
     # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
 
     # Single pass pose model
@@ -29,10 +30,11 @@ def run(environment: str, start: datetime, end: datetime):
     p = Pipeline(
         mp_manager=process_manager,
         detector_model=detector_model,
-        detector_device="cuda:0",
+        detector_device="cuda:1",
         pose_estimator_model=pose_model,
         pose_estimator_device="cuda:0",
         use_fp_16=True,
+        run_distributed=False,
     )
     p.run(
         environment=environment,

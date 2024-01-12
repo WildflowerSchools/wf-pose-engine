@@ -1,6 +1,9 @@
+import time
 from typing import Any, Dict, Union
 
 import torch
+
+from pose_engine.log import logger
 
 
 class MMLabCompatibleDataParallel(torch.nn.DataParallel):
@@ -26,7 +29,7 @@ class MMLabCompatibleDataParallel(torch.nn.DataParallel):
     def _run_forward(
         self, data: Union[dict, tuple, list], mode: str
     ) -> Union[Dict[str, torch.Tensor], list]:
-        """Unpacks data for :meth:`forward`
+        """Unpacks data and passes it to the DataParallel replicate and parallel_apply methods. Uses a custom gather method.`
 
         Args:
             data (dict or tuple or list): Data sampled from dataset.
@@ -35,17 +38,22 @@ class MMLabCompatibleDataParallel(torch.nn.DataParallel):
         Returns:
             dict or list: Results of training or testing mode.
         """
+        start = time.time()
+
         if isinstance(data, (dict)):
-            scattered_inputs, scattered_kwargs = self.scatter(
+            s = time.time()
+            scattered_inputs, _ = self.scatter(
                 [data["inputs"], data["data_samples"]],
                 kwargs=None,
                 device_ids=self.device_ids,
             )
+            logger.info(f"Profile: scatter: {round(time.time() - s, 2)} seconds")
 
             def chunk_list(input, chunk_size):
                 for i in range(0, len(input), chunk_size):
                     yield input[i : i + chunk_size]
 
+            s = time.time()
             scattered_inputs_inputs = []
             scattered_kwargs_data_samples = []
             for idx, scattered_input in enumerate(scattered_inputs):
@@ -59,19 +67,33 @@ class MMLabCompatibleDataParallel(torch.nn.DataParallel):
                 scattered_kwargs_data_samples.append(
                     {"data_samples": chunked_data_samples[idx], "mode": "predict"}
                 )
+            logger.info(
+                f"Profile: scatter augment: {round(time.time() - s, 2)} seconds"
+            )
 
+            s = time.time()
             replicas = self.replicate(self.module, self.device_ids[: len(inputs)])
+            logger.info(f"Profile: replicate: {round(time.time() - s, 2)} seconds")
+            s = time.time()
             outputs = self.parallel_apply(
                 replicas, scattered_inputs_inputs, scattered_kwargs_data_samples
             )
+            logger.info(
+                f"Profile: parallel inference: {round(time.time() - s, 2)} seconds"
+            )
 
+            s = time.time()
             results = []
             for output in outputs:
                 for pose_data_sample in output:
-                    # results.append(pose_data_sample.to(self.output_device))
-                    results.append(pose_data_sample.cpu())
+                    results.append(pose_data_sample.to(self.output_device))
+            logger.info(f"Profile: output augment: {round(time.time() - s, 2)} seconds")
         else:
             raise TypeError(
                 "Output of `data_preprocessor` should be " f"dict, but got {type(data)}"
             )
+
+        logger.info(
+            f"Profile: total dataparallel runtime: {round(time.time() - start, 2)} seconds"
+        )
         return results

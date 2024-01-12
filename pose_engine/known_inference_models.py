@@ -82,6 +82,18 @@ class DetectorModel(InferenceModel):
             bounding_box_format_enum=pose_2d.BoundingBoxFormatEnum.xyxy,
         )
 
+    @staticmethod
+    def rtmdet_medium_tensorrt_dynamic_640x640_fp16_batch():
+        return DetectorModel(
+            model_config="./configs/mmdet/rtmdet_m_640-8xb32_coco-person.py",
+            model_config_enum=pose_2d.DetectorModelConfigEnum.rtmdet_m_640_8xb32_coco_person,
+            checkpoint="./checkpoints/rtmdet_m_8xb32_100e_coco_obj365_person_235e8209_tensorrt_static_640x640_fp16_batch.engine",
+            checkpoint_enum=pose_2d.DetectorModelCheckpointEnum.rtmdet_m_8xb32_100e_coco_obj365_person_235e8209_tensorrt_static_640x640_fp16_batch,
+            deployment_config="./configs/tensorrt/mmdet/detection_tensorrt_dynamic-640x640_fp16_batch.py",
+            deployment_config_enum=pose_2d.DetectorModelDeploymentConfigEnum.tensorrt_dynamic_640x640_fp16_batch,
+            bounding_box_format_enum=pose_2d.BoundingBoxFormatEnum.xyxy,
+        )
+
 
 class PoseModel(InferenceModel):
     def __init__(

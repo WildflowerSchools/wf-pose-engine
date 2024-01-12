@@ -87,6 +87,7 @@ class PoseEstimator:
                 self.pose_estimator = MMLabCompatibleDataParallel(
                     self.pose_estimator,
                     device_ids=list(range(torch.cuda.device_count())),
+                    output_device=self.device,  # torch.device("cpu")
                 )
 
         else:  # TensorRT
@@ -260,6 +261,9 @@ class PoseEstimator:
                         # cuDNN 8.9.0     (current 8.9.7.29_cuda12)
                         # pytorch 2.1.2   (current 2.1.0)
                         # tensorRT 8.6.x  (current 8.6.1.6)
+                        #
+                        # As of 1/12/2024, the problem is when running the model of GPU device 1! Running the detector on device 1 causes the same issue.
+                        # I might need to set CUDA_VISIBLE_DEVICES on each process that's running the respective model: https://github.com/NVIDIA/TensorRT/issues/322
                         inference_results = self.pose_estimator.test_step(model_inputs)
                     else:
                         # s = time.time()
@@ -311,11 +315,12 @@ class PoseEstimator:
                 )
 
             try:
-                self._frame_count.value += len(frames)
-
                 logger.info(
                     f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
                 )
+
+                self._frame_count.value += len(frames)
+
                 imgs = []
                 for img_idx, img in enumerate(frames):
                     if isinstance(img, torch.Tensor):
@@ -381,6 +386,7 @@ class PoseEstimator:
 
                 # data_samples = merge_data_samples(pose_results)
 
+                start_yield_results_time = time.time()
                 if pose_results and len(pose_results) > 0:
                     for idx, pose_result in enumerate(pose_results):
                         if pose_result is None or len(pose_result.pred_instances) == 0:
@@ -435,6 +441,13 @@ class PoseEstimator:
                                 )
                             )
                             yield pose_prediction, box_prediction, pose_result_metadata
+
+                logger.info(
+                    f"Pose estimation batch #{batch_idx} yield results time: {round(time.time() - start_yield_results_time, 2)} seconds"
+                )
+                logger.info(
+                    f"Completed pose estimation batch #{batch_idx} - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds"
+                )
             finally:
                 del bboxes
                 del frames

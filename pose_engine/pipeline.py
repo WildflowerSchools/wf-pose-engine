@@ -28,11 +28,12 @@ class Pipeline:
         detector_device: str = "cpu",
         pose_estimator_device: str = "cpu",
         use_fp_16: bool = False,
+        run_distributed: bool = False,
     ):
         if (
             detector_model is None
             and pose_estimator_model.pose_estimator_type
-            is pose_2d.PoseEstimatorType.top_down
+            == pose_2d.PoseEstimatorType.top_down
         ):
             raise ValueError(
                 "Pipeline object requires a DetectorModel to be supplied when the PoseModel is a top down model type"
@@ -43,6 +44,14 @@ class Pipeline:
         self.detector_device: str = detector_device
         self.pose_estimator_device: str = pose_estimator_device
         self.use_fp_16 = use_fp_16
+        if (
+            self.pose_estimator_model.pose_estimator_type
+            == pose_2d.PoseEstimatorType.top_down
+        ):
+            # Don't allow models to run distributed when using topdown
+            self.run_distributed = False
+        else:
+            self.run_distributed = run_distributed
 
         self.mp_manager: mp.Manager = mp_manager
 
@@ -94,12 +103,12 @@ class Pipeline:
             device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
             shuffle=False,
             num_workers=1,
-            batch_size=300,
+            batch_size=100,
             pin_memory=True,
         )
 
         self.bbox_dataset = loaders.BoundingBoxesDataset(
-            bbox_queue_maxsize=150, wait_for_bboxes=True, mp_manager=self.mp_manager
+            bbox_queue_maxsize=200, wait_for_bboxes=True, mp_manager=self.mp_manager
         )
         self.bboxes_loader = loaders.BoundingBoxesDataLoader(
             dataset=self.bbox_dataset,
@@ -122,7 +131,6 @@ class Pipeline:
 
     def _init_processes(self):
         self.detection_process = None
-        run_distributed = False
 
         # When using topdown models, feed video frames to the detector
         # But when using bottomup or onestage, feed video frames to the estimator
@@ -140,7 +148,6 @@ class Pipeline:
             )
         else:
             pose_estimator_data_loader = self.video_frames_loader
-            run_distributed = True
 
         self.pose_estimation_process = ProcessPoseEstimation(
             pose_estimator_model=self.pose_estimator_model,
@@ -148,8 +155,8 @@ class Pipeline:
             output_poses_dataset=self.poses_dataset,
             device=self.pose_estimator_device,
             use_fp_16=self.use_fp_16,
-            run_distributed=run_distributed,
-            max_objects_per_inference=220,
+            run_distributed=self.run_distributed,
+            max_objects_per_inference=100,
         )
 
         self.store_poses_process = ProcessStorePoses(

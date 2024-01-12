@@ -85,7 +85,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         while not self.video_loader_thread_stopped():
             ii += 1
 
-            if ii > 10:
+            if ii > 60:  # 60 loops/videos is equal to 10 minutes of video
                 self._video_loader_thread_stopped.value = True
 
             try:
