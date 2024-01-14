@@ -31,34 +31,7 @@ class PosesDataset(torch.utils.data.IterableDataset):
         self.pose_queue = mp_manager.Queue(maxsize=pose_queue_maxsize)
 
     def add_data_object(self, data_object):
-        (pose, bbox, meta) = data_object
-
-        move_to_numpy = True  # TODO: Figure out whey I can't share tensors across processes. Unless I move tensors to the CPU, I get the error "RuntimeError: Attempted to send CUDA tensor received from another process; this is not currently supported. Consider cloning before sending."
-        if move_to_numpy:
-            if isinstance(pose, torch.Tensor):
-                pose = pose.cpu()
-
-            if isinstance(bbox, torch.Tensor):
-                bbox = bbox.cpu()
-
-            for key in meta.keys():
-                if isinstance(meta[key], torch.Tensor):
-                    meta[key] = meta[key].cpu()
-
-            self.pose_queue.put((pose, bbox, meta))
-        else:
-            # Attempts at making tensors shareable across processes
-            if isinstance(pose, torch.Tensor):
-                pose = pose.clone().share_memory_()
-
-            if isinstance(bbox, torch.Tensor):
-                bbox = bbox.clone().share_memory_()
-
-            for key in meta.keys():
-                if isinstance(meta[key], torch.Tensor):
-                    meta[key] = meta[key].clone().share_memory_()
-
-            self.pose_queue.put((pose, bbox, meta))
+        self.pose_queue.put(data_object)
 
     def queue_wait_time(self):
         return self._queue_wait_time.value
@@ -82,9 +55,12 @@ class PosesDataset(torch.utils.data.IterableDataset):
             start_wait = time.time()
 
             try:
-                pose, bbox, meta = self.pose_queue.get(block=False, timeout=0.5)
-                if pose is not None:
-                    yield (pose, bbox, meta)
+                pose_queue_item = self.pose_queue.get(block=False, timeout=0.5)
+                if isinstance(pose_queue_item, tuple):
+                    yield self.pose_queue.get(block=False, timeout=0.5)
+                elif isinstance(pose_queue_item, list):
+                    for t in pose_queue_item:
+                        yield t
             except queue.Empty:
                 end_wait = time.time() - start_wait
                 self._queue_wait_time.value += end_wait

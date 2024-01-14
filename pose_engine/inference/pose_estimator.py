@@ -13,7 +13,7 @@ from mmengine.dataset import Compose, pseudo_collate
 from mmengine.registry import init_default_scope
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.apis.inference import dataset_meta_from_config
-from mmpose.evaluation.functional import nearby_joints_nms, nms
+from mmpose.evaluation.functional import nearby_joints_nms
 
 # from mmpose.apis.inferencers import MMPoseInferencer
 from mmpose.structures import PoseDataSample
@@ -386,7 +386,9 @@ class PoseEstimator:
 
                 # data_samples = merge_data_samples(pose_results)
 
-                start_yield_results_time = time.time()
+                poses_to_yield = []
+                # TODO: Optimize this method for extracting results and preparing them for the pose queue
+                start_prepare_results_for_yield_time = time.time()
                 if pose_results and len(pose_results) > 0:
                     for idx, pose_result in enumerate(pose_results):
                         if pose_result is None or len(pose_result.pred_instances) == 0:
@@ -440,11 +442,20 @@ class PoseEstimator:
                                     ),  # 5 = confidence
                                 )
                             )
-                            yield pose_prediction, box_prediction, pose_result_metadata
+                            poses_to_yield.append(
+                                (pose_prediction, box_prediction, pose_result_metadata)
+                            )
 
                 logger.info(
-                    f"Pose estimation batch #{batch_idx} yield results time: {round(time.time() - start_yield_results_time, 2)} seconds"
+                    f"Pose estimation batch #{batch_idx} prepare results for yield time: {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
                 )
+
+                start_yield_results_time = time.time()
+                yield poses_to_yield
+                logger.info(
+                    f"Pose estimation batch #{batch_idx} yield time: {round(time.time() - start_yield_results_time, 2)} seconds"
+                )
+
                 logger.info(
                     f"Completed pose estimation batch #{batch_idx} - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds"
                 )

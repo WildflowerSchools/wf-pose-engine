@@ -22,8 +22,8 @@ def run(environment: str, start: datetime, end: datetime):
 
     # Single pass pose model
     detector_model = None
-    # pose_model = PoseModel.rtmo_large()
-    pose_model = PoseModel.rtmo_medium()
+    pose_model = PoseModel.rtmo_large()
+    # pose_model = PoseModel.rtmo_medium()
 
     process_manager = mp.Manager()
 
@@ -34,7 +34,7 @@ def run(environment: str, start: datetime, end: datetime):
         pose_estimator_model=pose_model,
         pose_estimator_device="cuda:0",
         use_fp_16=True,
-        run_distributed=False,
+        run_distributed=True,
     )
     p.run(
         environment=environment,

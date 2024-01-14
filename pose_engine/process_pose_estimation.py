@@ -1,3 +1,6 @@
+import concurrent.futures
+from ctypes import c_bool
+import queue
 from typing import Optional, Union
 
 import torch.multiprocessing as mp
@@ -43,6 +46,7 @@ class ProcessPoseEstimation:
         self._processing_start_time = mp.Value("d", -1.0)
         self._first_inference_time = mp.Value("d", -1.0)
         self._time_waiting = mp.Value("d", 0)
+        self._dataloader_exhausted = mp.Value(c_bool, False)
 
     @property
     def frame_count(self) -> int:
@@ -63,6 +67,10 @@ class ProcessPoseEstimation:
     @property
     def time_waiting(self) -> int:
         return self._time_waiting.value
+
+    @property
+    def dataloader_exhausted(self) -> bool:
+        return self._dataloader_exhausted.value
 
     def is_topdown(self):
         return (

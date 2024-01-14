@@ -50,7 +50,7 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self.video_loader_lock = mp.Lock()
         self._video_loader_thread_stopped = mp.Value(c_bool, False)
         self._video_loader_thread_initialized = mp.Value(c_bool, False)
-        self.video_loader_thread = None
+        self.video_loader_thread: Thread = None
 
     def add_data_object(self, data_object):
         self.video_object_queue.put(data_object)
@@ -218,11 +218,12 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         if self.video_loader_thread is not None:
             self._video_loader_thread_stopped.value = True
             self.video_loader_thread.join()
-            self.video_loader_thread
 
             self._video_loader_thread_initialized.value = False
 
     def cleanup(self):
+        self.stop_video_loader()
+
         try:
             while True:
                 item = self.video_object_queue.get_nowait()
@@ -240,5 +241,3 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
             pass
         finally:
             del self.video_frame_queue
-
-        self.stop_video_loader()

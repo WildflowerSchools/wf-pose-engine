@@ -103,7 +103,7 @@ class Pipeline:
             device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
             shuffle=False,
             num_workers=1,
-            batch_size=100,
+            batch_size=210,
             pin_memory=True,
         )
 
@@ -119,14 +119,14 @@ class Pipeline:
         )
 
         self.poses_dataset = loaders.PosesDataset(
-            pose_queue_maxsize=300, wait_for_poses=True, mp_manager=self.mp_manager
+            pose_queue_maxsize=1000, wait_for_poses=True, mp_manager=self.mp_manager
         )
         self.poses_loader = loaders.PosesDataLoader(
             dataset=self.poses_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=100,
-            pin_memory=True,
+            batch_size=200,
+            pin_memory=False,
         )
 
     def _init_processes(self):
@@ -156,7 +156,7 @@ class Pipeline:
             device=self.pose_estimator_device,
             use_fp_16=self.use_fp_16,
             run_distributed=self.run_distributed,
-            max_objects_per_inference=100,
+            max_objects_per_inference=210,
         )
 
         self.store_poses_process = ProcessStorePoses(
@@ -184,16 +184,6 @@ class Pipeline:
 
         for raw_video in raw_videos:
             self.video_frames_loader.dataset.add_data_object(raw_video)
-
-        # When using topdown models, feed video frames to the detector
-        # But when using bottomup or onestage, feed video frames to the estimator
-        # if (
-        #     self.pose_estimator_model.pose_estimator_type
-        #     == pose_2d.PoseEstimatorType.top_down
-        # ):
-        #     self.detection_process.add_data_objects(data_objects=raw_videos)
-        # else:
-        #     self.pose_estimation_process.add_data_objects(data_objects=raw_videos)
 
     def start(self):
         bounding_box_format_enum = (
