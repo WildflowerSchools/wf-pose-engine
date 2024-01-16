@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 import torch.multiprocessing as mp
 
 import honeycomb_io
+from mmengine.dataset import InfiniteSampler
 from pose_db_io.handle.models import pose_2d
 
 from .known_inference_models import DetectorModel, PoseModel
@@ -24,11 +25,12 @@ class Pipeline:
         self,
         detector_model: Optional[DetectorModel],
         pose_estimator_model: PoseModel,
-        mp_manager: mp.Manager,
+        mp_manager: Optional[mp.Manager] = None,
         detector_device: str = "cpu",
         pose_estimator_device: str = "cpu",
         use_fp_16: bool = False,
-        run_distributed: bool = False,
+        run_parallel: bool = False,
+        distributed_rank: Optional[int] = None,
     ):
         if (
             detector_model is None
@@ -44,16 +46,21 @@ class Pipeline:
         self.detector_device: str = detector_device
         self.pose_estimator_device: str = pose_estimator_device
         self.use_fp_16 = use_fp_16
+        self.distributed_rank = distributed_rank
+        self.video_frames_sampler = None
+
         if (
             self.pose_estimator_model.pose_estimator_type
             == pose_2d.PoseEstimatorType.top_down
-        ):
-            # Don't allow models to run distributed when using topdown
-            self.run_distributed = False
+        ) or self.distributed_rank is not None:
+            # Don't allow models to run distributed when using topdown or the model is being run distributed
+            self.run_parallel = False
         else:
-            self.run_distributed = run_distributed
+            self.run_parallel = run_parallel
 
         self.mp_manager: mp.Manager = mp_manager
+        if self.mp_manager is None:
+            self.mp_manager = mp.Manager()
 
         self.environment_id: Optional[str] = None
         self.environment_name: Optional[str] = None
@@ -64,6 +71,18 @@ class Pipeline:
 
         self.pose_estimator = None
         self.detector = None
+
+        self.video_frame_dataset = None
+        self.video_frames_loader = None
+        self.bbox_dataset = None
+        self.bbox_loader = None
+        self.poses_dataset = None
+        self.poses_loader = None
+
+        self.detection_process = None
+        self.pose_estimation_process = None
+        self.store_poses_process = None
+        self.status_poll_process = None
 
     def _load_environment(self):
         df_all_environments = honeycomb_io.fetch_all_environments(
@@ -98,13 +117,19 @@ class Pipeline:
             filter_min_datetime=self.start_datetime,
             filter_max_datetime=self.end_datetime,
         )
+        if self.distributed_rank is not None:
+            self.video_frames_sampler = InfiniteSampler(
+                self.video_frame_dataset, shuffle=False
+            )
+
         self.video_frames_loader = loaders.VideoFramesDataLoader(
             dataset=self.video_frame_dataset,
             device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
             shuffle=False,
             num_workers=1,
-            batch_size=210,
+            batch_size=140,
             pin_memory=True,
+            sampler=self.video_frames_sampler,
         )
 
         self.bbox_dataset = loaders.BoundingBoxesDataset(
@@ -155,8 +180,9 @@ class Pipeline:
             output_poses_dataset=self.poses_dataset,
             device=self.pose_estimator_device,
             use_fp_16=self.use_fp_16,
-            run_distributed=self.run_distributed,
-            max_objects_per_inference=210,
+            run_parallel=self.run_parallel,
+            distributed_rank=self.distributed_rank,
+            max_objects_per_inference=140,
         )
 
         self.store_poses_process = ProcessStorePoses(
@@ -261,9 +287,12 @@ class Pipeline:
         self.cleanup()
 
     def __del__(self):
-        del self.status_poll_process
-        del self.store_poses_process
-        del self.pose_estimation_process
+        if self.status_poll_process is not None:
+            del self.status_poll_process
+        if self.store_poses_process is not None:
+            del self.store_poses_process
+        if self.pose_estimation_process is not None:
+            del self.pose_estimation_process
         if self.detection_process is not None:
             del self.detection_process
         if self.pose_estimator is not None:

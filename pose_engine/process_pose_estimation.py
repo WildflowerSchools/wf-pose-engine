@@ -23,13 +23,15 @@ class ProcessPoseEstimation:
         output_poses_dataset: PosesDataset,
         device: str = "cpu",
         use_fp_16: bool = False,
-        run_distributed: bool = False,
+        run_parallel: bool = False,
+        distributed_rank: Optional[int] = None,
         max_objects_per_inference: int = 100,
     ):
         self.pose_estimator_model: PoseModel = pose_estimator_model
         self.device: str = device
         self.use_fp_16: bool = use_fp_16
-        self.run_distributed: bool = run_distributed
+        self.run_parallel: bool = run_parallel
+        self.distributed_rank: int = distributed_rank
         self.max_objects_per_inference: int = max_objects_per_inference
 
         self.data_loader: Union[
@@ -113,7 +115,8 @@ class ProcessPoseEstimation:
                 device=self.device,
                 max_objects_per_inference=self.max_objects_per_inference,
                 use_fp_16=self.use_fp_16,
-                run_distributed=self.run_distributed,
+                run_parallel=self.run_parallel,
+                distributed_rank=self.distributed_rank,
             )
 
             for pose_tuple in pose_estimator.iter_dataloader(loader=self.data_loader):

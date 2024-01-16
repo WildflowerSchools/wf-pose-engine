@@ -10,6 +10,7 @@ import torch.utils.data
 from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
 from mmengine.dataset import Compose, pseudo_collate
+from mmengine.model.wrappers import MMDistributedDataParallel
 from mmengine.registry import init_default_scope
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.apis.inference import dataset_meta_from_config
@@ -35,7 +36,8 @@ class PoseEstimator:
         device: str = "cuda:1",
         max_objects_per_inference: int = 75,
         use_fp_16: bool = False,
-        run_distributed: bool = False,
+        run_parallel: bool = False,
+        distributed_rank: Optional[int] = None,
         compile_model: bool = False,
     ):
         logger.info("Initializing pose estimator...")
@@ -53,6 +55,10 @@ class PoseEstimator:
         self.device = device
         self.max_objects_per_inference = max_objects_per_inference
         self.use_fp_16 = use_fp_16
+        self.run_parallel = run_parallel
+        self.distributed_rank = distributed_rank
+        if self.distributed_rank is not None:
+            self.device = torch.device(type="cpu")
         self.compile_model = compile_model
 
         self.lock = mp.Lock()
@@ -70,7 +76,7 @@ class PoseEstimator:
             pose_estimator.share_memory()
 
             if self.use_fp_16:
-                self.pose_estimator = pose_estimator.half().to(self.device)
+                self.pose_estimator = pose_estimator.half()  # .to(self.device)
             else:
                 self.pose_estimator = pose_estimator
 
@@ -83,11 +89,15 @@ class PoseEstimator:
                 )
                 logger.info("Finished compiling pose estimator model")
 
-            if run_distributed:  # TODO: Figure out distributed data processing
+            if self.run_parallel:
                 self.pose_estimator = MMLabCompatibleDataParallel(
                     self.pose_estimator,
                     device_ids=list(range(torch.cuda.device_count())),
                     output_device=self.device,  # torch.device("cpu")
+                )
+            elif self.distributed_rank is not None:
+                self.pose_estimator = MMDistributedDataParallel(
+                    self.pose_estimator, device_ids=[self.distributed_rank]
                 )
 
         else:  # TensorRT
@@ -222,8 +232,13 @@ class PoseEstimator:
 
             data_list.append(processed_pipeline_data)
 
+        if total_pre_processing_time == 0:
+            records_per_second = "N/A"
+        else:
+            records_per_second = {round(len(data_list) / total_pre_processing_time, 2)}
+
         logger.info(
-            f"Pose estimator data pipeline pre-processing time: {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {round(len(data_list) / total_pre_processing_time, 2)} records/second"
+            f"Pose estimator data pipeline pre-processing time: {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
         )
 
         results = []

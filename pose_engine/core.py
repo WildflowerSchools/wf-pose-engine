@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
+from typing import Optional
 
 import pandas as pd
+import torch
+from torch.distributed import init_process_group, destroy_process_group
 import torch.multiprocessing as mp
 
 from pose_db_io import PoseHandle
@@ -11,9 +14,62 @@ from .log import logger
 from .pipeline import Pipeline
 
 
+def ddp_setup(rank, world_size):
+    """
+    Set up the distributed environment.
+
+    Args:
+        rank: The rank of the current process. Unique identifier for each process in the distributed training.
+        world_size: Total number of processes participating in the distributed training.
+    """
+    # Initialize the process group.
+    # 'backend' specifies the communication backend to be used, "nccl" is optimized for GPU training.
+    init_process_group(
+        rank=rank, world_size=world_size
+    )  # Try NOT specifiying a backend for now
+
+    # Set the current CUDA device to the specified device (identified by rank).
+    # This ensures that each process uses a different GPU in a multi-GPU setup.
+    torch.cuda.set_device(rank)
+
+
+def _run(
+    rank: int,
+    world_size: int,
+    environment: str,
+    start: datetime,
+    end: datetime,
+    detector_model: Optional[DetectorModel],
+    pose_model: Optional[PoseModel],
+    run_parallel: bool = False,
+    run_distributed: bool = False,
+):
+    distributed_rank = None
+    if run_distributed:
+        ddp_setup(rank, world_size)
+        distributed_rank = rank
+
+    p = Pipeline(
+        detector_model=detector_model,
+        detector_device="cuda:1",
+        pose_estimator_model=pose_model,
+        pose_estimator_device="cuda:0",
+        use_fp_16=True,
+        run_parallel=run_parallel,
+        distributed_rank=distributed_rank,
+    )
+    p.run(
+        environment=environment,
+        start_datetime=start,
+        end_datetime=end,
+    )
+
+
 def run(environment: str, start: datetime, end: datetime):
-    # detector_model = DetectorModel.rtmdet_medium()
-    # pose_model = PoseModel.rtmpose_large_384()
+    run_distributed = False
+    run_parallel = False
+    detector_model = DetectorModel.rtmdet_medium()
+    pose_model = PoseModel.rtmpose_large_384()
 
     # TensorRT models
     # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
@@ -21,26 +77,44 @@ def run(environment: str, start: datetime, end: datetime):
     # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
 
     # Single pass pose model
-    detector_model = None
-    pose_model = PoseModel.rtmo_large()
+    # detector_model = None
+    # pose_model = PoseModel.rtmo_large()
     # pose_model = PoseModel.rtmo_medium()
 
-    process_manager = mp.Manager()
+    if run_distributed:
+        world_size = torch.cuda.device_count()
+    else:
+        world_size = 1
 
-    p = Pipeline(
-        mp_manager=process_manager,
-        detector_model=detector_model,
-        detector_device="cuda:1",
-        pose_estimator_model=pose_model,
-        pose_estimator_device="cuda:0",
-        use_fp_16=True,
-        run_distributed=True,
+    mp.spawn(
+        _run,
+        args=(
+            world_size,
+            environment,
+            start,
+            end,
+            detector_model,
+            pose_model,
+            run_parallel,
+            run_distributed,
+        ),
+        nprocs=world_size,
     )
-    p.run(
-        environment=environment,
-        start_datetime=start,
-        end_datetime=end,
-    )
+
+    # if run_distributed:
+    #     world_size = torch.cuda.device_count()
+    #     mp.spawn(
+    #         _run,
+    #         args=(world_size, environment, start, end, detector_model, pose_model, run_parallel, run_distributed),
+    #         nprocs=world_size,
+    #     )
+    # else:
+    #     world_size = 1
+    #     rank = 1
+    #     _run(
+
+    #         rank, world_size, environment, start, end, detector_model, pose_model, run_parallel, run_distributed
+    #     )
 
 
 def batch():
