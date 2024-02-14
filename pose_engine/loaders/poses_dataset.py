@@ -1,5 +1,7 @@
 from ctypes import c_bool
+from multiprocessing import sharedctypes
 import queue
+import time
 
 import torch
 import torch.multiprocessing as mp
@@ -17,45 +19,24 @@ class PosesDataset(torch.utils.data.IterableDataset):
     ):
         super().__init__()
 
-        self.done_loading_dataset = mp.Value(c_bool, False)
+        self.done_loading_dataset: sharedctypes.Synchronized = mp.Value(c_bool, False)
 
         self.pose_queue_maxsize = pose_queue_maxsize
         self.wait_for_poses = wait_for_poses
+
+        self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
 
         if mp_manager is None:
             mp_manager = mp.Manager()
 
         self.pose_queue = mp_manager.Queue(maxsize=pose_queue_maxsize)
 
-    def add_pose(self, pose_record):
-        (pose, bbox, meta) = pose_record
+    def add_data_object(self, data_object):
+        self.pose_queue.put(data_object)
 
-        move_to_numpy = True  # TODO: Figure out whey I can't share tensors across processes. Unless I move tensors to the CPU, I get the error "RuntimeError: Attempted to send CUDA tensor received from another process; this is not currently supported. Consider cloning before sending."
-        if move_to_numpy:
-            if isinstance(pose, torch.Tensor):
-                pose = pose.cpu()
-
-            if isinstance(bbox, torch.Tensor):
-                bbox = bbox.cpu()
-
-            for key in meta.keys():
-                if isinstance(meta[key], torch.Tensor):
-                    meta[key] = meta[key].cpu()
-
-            self.pose_queue.put((pose, bbox, meta))
-        else:
-            # Attempts at making tensors shareable across processes
-            if isinstance(pose, torch.Tensor):
-                pose = pose.clone().share_memory_()
-
-            if isinstance(bbox, torch.Tensor):
-                bbox = bbox.clone().share_memory_()
-
-            for key in meta.keys():
-                if isinstance(meta[key], torch.Tensor):
-                    meta[key] = meta[key].clone().share_memory_()
-
-            self.pose_queue.put((pose, bbox, meta))
+    @property
+    def queue_wait_time(self):
+        return self._queue_wait_time.value
 
     def size(self):
         return self.pose_queue.qsize()
@@ -73,11 +54,20 @@ class PosesDataset(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         while True:
+            start_wait = time.time()
+
             try:
-                pose, bbox, meta = self.pose_queue.get(block=False, timeout=0.5)
-                if pose is not None:
-                    yield (pose, bbox, meta)
+                pose_queue_item = self.pose_queue.get(block=False, timeout=0.5)
+                if isinstance(pose_queue_item, tuple):
+                    yield self.pose_queue.get(block=False, timeout=0.5)
+                elif isinstance(pose_queue_item, list):
+                    for t in pose_queue_item:
+                        yield t
             except queue.Empty:
+                end_wait = time.time() - start_wait
+                with self._queue_wait_time.get_lock():
+                    self._queue_wait_time.value += end_wait
+
                 # DO NOT REMOVE: the "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.pose_queue.qsize() == 0:
                     if not self.wait_for_poses:

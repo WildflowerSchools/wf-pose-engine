@@ -70,13 +70,78 @@ def click_options_environment_start_end():
     type=click.Path(exists=True),
     help="env file path",
 )
-def cli(env_file):
+@click.option("--profile", is_flag=True)
+def cli(env_file, profile):
     if env_file is None:
         env_file = os.path.join(os.getcwd(), ".env")
 
     if os.path.exists(env_file):
         logger.info("Loading env file")
         load_dotenv(dotenv_path=env_file)
+
+    if profile:
+        import cProfile
+        import pstats
+        import atexit
+
+        import yappi
+
+        logger.warning("PROFILING MODE ONE")
+
+        use_system_profiler = False
+        pr = None
+        pr_output = None
+        yappi_output = None
+        if use_system_profiler:
+            pr = cProfile.Profile()
+            pr.enable()
+            # pylint: disable=R1732
+            pr_output = open(
+                file="/tmp/pose_engine_cprofile.prof", mode="w", encoding="utf-8"
+            )
+        else:
+            yappi.set_clock_type(
+                "wall"
+            )  # Use set_clock_type("cput") for cpu time, use set_clock_type("wall") for wall time
+            yappi.start()
+            # pylint: disable=R1732
+            yappi_output = open(
+                file="/tmp/pose_engine_yappi_profile.txt", mode="w", encoding="utf-8"
+            )
+
+        def close_profiler():
+            try:
+                if pr is not None:
+                    pr.disable()
+                    if pr_output is not None:
+                        pstats.Stats(pr, stream=pr_output).sort_stats(
+                            "cumulative"
+                        ).print_stats()
+
+                if yappi_output is not None:
+                    yappi.stop()
+                    threads = yappi.get_thread_stats()
+                    # pylint: disable=E1101
+                    threads.print_all(out=yappi_output)
+                    for thread in threads:
+                        yappi_output.write(
+                            f"Function stats for ({thread.name}) ({thread.id})"
+                        )
+                        # pylint: disable=E1101
+                        yappi.get_func_stats(ctx_id=thread.id).print_all(
+                            out=yappi_output
+                        )
+            finally:
+                if pr_output is not None:
+                    pr_output.flush()
+                    pr_output.close()
+                if yappi_output is not None:
+                    yappi_output.flush()
+                    yappi_output.close()
+
+                logger.warning("Profiling completed")
+
+        atexit.register(close_profiler)
 
 
 @click.command(name="run", help="Generate and store poses from classroom video")

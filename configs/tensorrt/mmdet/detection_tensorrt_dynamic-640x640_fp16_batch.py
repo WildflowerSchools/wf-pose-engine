@@ -1,4 +1,4 @@
-_base_ = ['../_base_/base_dynamic.py', '../mmdeploy/configs/_base_/backends/tensorrt.py']
+_base_ = ['../_base_/base_dynamic.py', '../mmdeploy/configs/_base_/backends/tensorrt-fp16.py']
 
 backend_config = dict(
     common_config=dict(max_workspace_size=1 << 30),

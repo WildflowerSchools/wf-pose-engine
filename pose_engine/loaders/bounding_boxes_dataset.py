@@ -1,4 +1,6 @@
 from ctypes import c_bool
+from multiprocessing import sharedctypes
+import time
 import queue
 
 import torch
@@ -17,18 +19,20 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
     ):
         super().__init__()
 
-        self.done_loading_dataset = mp.Value(c_bool, False)
+        self.done_loading_dataset: sharedctypes.Synchronized = mp.Value(c_bool, False)
 
         self.bbox_queue_maxsize = bbox_queue_maxsize
         self.wait_for_bboxes = wait_for_bboxes
+
+        self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
 
         if mp_manager is None:
             mp_manager = mp.Manager()
 
         self.bbox_queue = mp_manager.Queue(maxsize=bbox_queue_maxsize)
 
-    def add_bboxes(self, bbox_records):
-        (bboxes, frame, meta) = bbox_records
+    def add_data_object(self, data_object):
+        (bboxes, frame, meta) = data_object
 
         move_to_numpy = True  # TODO: Figure out whey I can't share tensors across processes. Unless I move tensors to the CPU, I get the error "RuntimeError: Attempted to send CUDA tensor received from another process; this is not currently supported. Consider cloning before sending."
         if move_to_numpy:
@@ -47,6 +51,10 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
                 (bboxes.clone().share_memory_(), frame.clone().share_memory_(), meta)
             )
 
+    @property
+    def queue_wait_time(self):
+        return self._queue_wait_time.value
+
     def size(self):
         return self.bbox_queue.qsize()
 
@@ -63,11 +71,17 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
 
     def __iter__(self):
         while True:
+            start_wait = time.time()
+
             try:
                 bboxes, images, meta = self.bbox_queue.get(block=False, timeout=0.5)
                 if bboxes is not None:
                     yield (bboxes, images, meta)
             except queue.Empty:
+                end_wait = time.time() - start_wait
+                with self._queue_wait_time.get_lock():
+                    self._queue_wait_time.value += end_wait
+
                 # DO NOT REMOVE: the "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.bbox_queue.qsize() == 0:
                     if not self.wait_for_bboxes:

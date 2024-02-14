@@ -3,7 +3,6 @@ from threading import Thread
 import time
 from typing import Optional
 
-from pose_engine import inference
 from pose_engine import loaders
 from pose_engine.process_detection import ProcessDetection
 from pose_engine.process_pose_estimation import ProcessPoseEstimation
@@ -16,17 +15,13 @@ class ProcessStatusPoll:
         video_frame_dataset: loaders.VideoFramesDataset,
         bounding_box_dataset: loaders.BoundingBoxesDataset,
         poses_dataset: loaders.PosesDataset,
-        # detector: inference.Detector,
-        # pose_estimator: inference.PoseEstimator,
-        detection_process: ProcessDetection,
         pose_estimation_process: ProcessPoseEstimation,
+        detection_process: Optional[ProcessDetection] = None,
         poll: int = 10,
     ):
         self.video_frame_dataset: loaders.VideoFramesDataset = video_frame_dataset
         self.bounding_box_dataset: loaders.BoundingBoxesDataset = bounding_box_dataset
         self.poses_dataset: loaders.PosesDataset = poses_dataset
-        # self.detector = detector
-        # self.pose_estimator = pose_estimator
         self.detection_process: ProcessDetection = detection_process
         self.pose_estimation_process: ProcessPoseEstimation = pose_estimation_process
         self.poll: int = poll
@@ -54,6 +49,13 @@ class ProcessStatusPoll:
             del self.polling_thread
 
     def _run(self):
+        start_run_time = time.time()
+
+        start_detector_time = None
+        start_pose_estimator_time = None
+        first_detector_inference_time = None
+        first_pose_inference_time = None
+
         current_detector_inference_count = 0
         current_pose_frame_count = 0
         current_pose_inference_count = 0
@@ -61,36 +63,246 @@ class ProcessStatusPoll:
         last_pose_frame_count = 0
         last_pose_inference_count = 0
 
-        while not self.stop_event.is_set():
+        seconds_video_frame_dataset_waiting = 0
+        seconds_bounding_box_dataset_waiting = 0
+        seconds_poses_dataset_waiting = 0
+        seconds_detector_running_from_start = 0
+        seconds_detector_waiting = 0
+        seconds_detector_processing = 0
+        seconds_pose_inference_running_from_start = 0
+        seconds_pose_inference_waiting = 0
+        seconds_pose_inference_processing = 0
+
+        while True:
+            current_run_time = time.time()
+            seconds_running = round((current_run_time - start_run_time), 2)
+
+            if seconds_running == 0:
+                continue
+
+            if self.video_frame_dataset is not None:
+                seconds_video_frame_dataset_waiting = round(
+                    self.video_frame_dataset.queue_wait_time, 2
+                )
+
+            if self.bounding_box_dataset is not None:
+                seconds_bounding_box_dataset_waiting = round(
+                    self.bounding_box_dataset.queue_wait_time, 2
+                )
+
+            if self.poses_dataset is not None:
+                seconds_poses_dataset_waiting = round(
+                    self.poses_dataset.queue_wait_time, 2
+                )
+
             if self.detection_process is not None:
                 current_detector_inference_count = (
                     self.detection_process.inference_count
                 )
 
             if self.pose_estimation_process is not None:
-                current_pose_frame_count = self.pose_estimation_process.frame_count
+                current_pose_frame_count = (
+                    self.pose_estimation_process.total_frame_count
+                )
                 current_pose_inference_count = (
-                    self.pose_estimation_process.inference_count
+                    self.pose_estimation_process.total_inference_count
                 )
 
+            if current_detector_inference_count > 0:
+                if start_detector_time is None:
+                    start_detector_time = self.detection_process.start_time
+                    if start_detector_time == -1:
+                        start_detector_time = None
+
+                if first_detector_inference_time is None:
+                    first_detector_inference_time = (
+                        self.detection_process.first_inference_time
+                    )
+                    if first_detector_inference_time == -1:
+                        first_detector_inference_time = None
+
+                if start_detector_time is not None:
+                    seconds_detector_running_from_start = round(
+                        self.detection_process.running_time_from_start, 2
+                    )
+                    seconds_detector_waiting = round(
+                        self.detection_process.time_waiting, 2
+                    )
+                    seconds_detector_processing = round(
+                        seconds_detector_running_from_start - seconds_detector_waiting,
+                        2,
+                    )
+
+            if current_pose_frame_count > 0:
+                if start_pose_estimator_time is None:
+                    start_pose_estimator_time = (
+                        self.pose_estimation_process.earliest_processing_start_time
+                    )
+                    if start_pose_estimator_time == -1:
+                        start_pose_estimator_time = None
+
+                if first_pose_inference_time is None:
+                    first_pose_inference_time = (
+                        self.pose_estimation_process.earliest_first_inference_time
+                    )
+                    if first_pose_inference_time == -1:
+                        first_pose_inference_time = None
+
+                if start_pose_estimator_time is not None:
+                    seconds_pose_inference_running_from_start = round(
+                        self.pose_estimation_process.total_time_running_from_start, 2
+                    )
+                    seconds_pose_inference_waiting = round(
+                        self.pose_estimation_process.total_time_waiting, 2
+                    )
+                    seconds_pose_inference_processing = round(
+                        seconds_pose_inference_running_from_start
+                        - seconds_pose_inference_waiting,
+                        2,
+                    )
+
             logger.info(
-                f"Video frame queue size: {self.video_frame_dataset.size()}/{self.video_frame_dataset.maxsize()}"
+                f"Status: Running time: {seconds_running} seconds ({round(seconds_running / 60 / 60, 2)} hours)"
+            )
+
+            frames_queued_per_second = "N/A"
+            if (
+                self.video_frame_dataset.video_loader_running_time_from_first_frame_read
+                > 0
+            ):
+                frames_queued_per_second = round(
+                    self.video_frame_dataset.total_video_frames_queued
+                    / self.video_frame_dataset.video_loader_running_time_from_first_frame_read,
+                    2,
+                )
+            logger.info(
+                f"Status: Video loader progress: Video files processed - {self.video_frame_dataset.total_video_files_completed} / {self.video_frame_dataset.total_video_files_queued}, Total frames queued - {self.video_frame_dataset.total_video_frames_queued}, Frames queued per second - {frames_queued_per_second}"
             )
             logger.info(
-                f"Bounding box queue size: {self.bounding_box_dataset.size()}/{self.bounding_box_dataset.maxsize()}"
+                f"Status: Video frame queue size: {self.video_frame_dataset.size()}/{self.video_frame_dataset.maxsize()}"
             )
-            logger.info(
-                f"Poses queue size: {self.poses_dataset.size()}/{self.poses_dataset.maxsize()}"
-            )
-            logger.info(
-                f"Overall Detector FPS: {(current_detector_inference_count - last_detector_inference_count) / self.poll}"
-            )
-            logger.info(
-                f"Overall Pose Inference FPS: {(current_pose_frame_count - last_pose_frame_count) / self.poll}"
-            )
-            logger.info(
-                f"Overall Pose Inference BBPS (bounding box per second): {(current_pose_inference_count - last_pose_inference_count) / self.poll}\n"
-            )
+
+            if self.detection_process is not None:
+                logger.info(
+                    f"Status: Bounding box queue size: {self.bounding_box_dataset.size()}/{self.bounding_box_dataset.maxsize()}"
+                )
+            if self.pose_estimation_process is not None:
+                logger.info(
+                    f"Status: Poses queue size: {self.poses_dataset.size()}/{self.poses_dataset.maxsize()}"
+                )
+
+            if self.video_frame_dataset is not None:
+                logger.info(
+                    f"Status: Time video frame dataset idle waiting for video: {seconds_video_frame_dataset_waiting} seconds"
+                )
+            if self.video_frame_dataset is not None:
+                logger.info(
+                    f"Status: Time bounding box dataset idle waiting for boxes: {seconds_bounding_box_dataset_waiting} seconds"
+                )
+            if self.video_frame_dataset is not None:
+                logger.info(
+                    f"Status: Time poses dataset idle waiting for poses: {seconds_poses_dataset_waiting} seconds"
+                )
+
+            if (
+                self.detection_process is not None
+                and first_detector_inference_time is not None
+            ):
+                frames_last_x = (
+                    current_detector_inference_count - last_detector_inference_count
+                )
+                fps_last_x = round(
+                    (current_detector_inference_count - last_detector_inference_count)
+                    / self.poll,
+                    2,
+                )
+                logger.info(
+                    f"Status: Detector (last {self.poll} seconds): {fps_last_x} FPS | {frames_last_x} frames"
+                )
+                running_time_since_first_detector_inference = round(
+                    self.detection_process.running_time_from_first_inference, 2
+                )
+                if running_time_since_first_detector_inference > 0:
+                    frames_overall = current_detector_inference_count
+                    fps_overall = round(
+                        frames_overall / running_time_since_first_detector_inference, 2
+                    )
+
+                    logger.info(
+                        f"Status: Detector (overall): {fps_overall} FPS | {frames_overall} frames | {seconds_detector_running_from_start} seconds running  | {running_time_since_first_detector_inference} seconds running since first inference | {seconds_detector_processing} seconds processing | {seconds_detector_waiting} seconds waiting"
+                    )
+
+            if (
+                self.pose_estimation_process is not None
+                and first_pose_inference_time is not None
+            ):
+                frames_last_x = current_pose_frame_count - last_pose_frame_count
+                bb_last_x = current_pose_inference_count - last_pose_inference_count
+                fps_last_x = round(frames_last_x / self.poll, 2)
+                bbps_last_x = round(bb_last_x / self.poll, 2)
+                logger.info(
+                    f"Status: Pose Inference (last {self.poll} seconds): {fps_last_x} FPS | {bbps_last_x} BBPS (bounding boxes per second) | {frames_last_x} frames | {bb_last_x} bounding boxes"
+                )
+                total_running_time_since_first_pose_inference = round(
+                    self.pose_estimation_process.total_time_running_from_first_inference,
+                    2,
+                )
+                if total_running_time_since_first_pose_inference > 0:
+                    frames_overall = current_pose_frame_count
+                    bb_overall = current_pose_inference_count
+                    fps_per_process = round(
+                        frames_overall / total_running_time_since_first_pose_inference,
+                        2,
+                    )
+                    bbps_per_process = round(
+                        bb_overall / total_running_time_since_first_pose_inference, 2
+                    )
+                    fps_overall = round(
+                        round(
+                            frames_overall
+                            / (current_run_time - first_pose_inference_time),
+                            2,
+                        )
+                    )
+                    bbps_overall = round(
+                        round(
+                            bb_overall / (current_run_time - first_pose_inference_time),
+                            2,
+                        )
+                    )
+
+                    logger.info(
+                        f"Status: Pose Inference (overall): {fps_overall} FPS | {bbps_overall} BBPS (bounding boxes per second) | {fps_per_process} FPS per process | {fps_per_process} BBPS per process | {frames_overall} frames | {bbps_per_process} bounding boxes | {seconds_pose_inference_running_from_start} seconds running | {total_running_time_since_first_pose_inference} seconds running since first inference | {seconds_pose_inference_processing} seconds processing | {seconds_pose_inference_waiting} seconds waiting"
+                    )
+
+            if self.stop_event.is_set():
+                first_inference_time = None
+                if (
+                    first_detector_inference_time is not None
+                    and first_pose_inference_time is not None
+                ):
+                    if first_detector_inference_time < first_pose_inference_time:
+                        first_inference_time = first_detector_inference_time
+                    else:
+                        first_inference_time = first_pose_inference_time
+                elif first_detector_inference_time is not None:
+                    first_inference_time = first_detector_inference_time
+                elif first_pose_inference_time is not None:
+                    first_inference_time = first_pose_inference_time
+
+                logger.info(
+                    f"Status: Overall run details from process start time: {round(current_pose_frame_count / seconds_running, 2)} FPS | {round(current_pose_inference_count / seconds_running, 2)} BBPS (bounding boxes per second) | {seconds_running} seconds running | {current_pose_frame_count} frames | {current_pose_inference_count} bounding boxes"
+                )
+
+                if first_inference_time is not None:
+                    seconds_running_from_first_inference = round(
+                        current_run_time - first_inference_time, 2
+                    )
+                    logger.info(
+                        f"Status: Overall run details from first inference: {round(current_pose_frame_count / seconds_running_from_first_inference, 2)} FPS | {round(current_pose_inference_count / seconds_running_from_first_inference, 2)} BBPS (bounding boxes per second) | {seconds_running_from_first_inference} seconds running from first inference | {current_pose_frame_count} frames | {current_pose_inference_count} bounding boxes"
+                    )
+
+                break
 
             last_detector_inference_count = current_detector_inference_count
             last_pose_frame_count = current_pose_frame_count
