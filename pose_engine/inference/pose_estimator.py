@@ -4,8 +4,10 @@ from typing import List, Optional, Union
 
 import numpy as np
 import torch
-from torch import nn
+import torch.multiprocessing as mp
 import torch.utils.data
+
+# import torch_tensorrt
 
 from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
@@ -15,12 +17,9 @@ from mmengine.registry import init_default_scope
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.apis.inference import dataset_meta_from_config
 from mmpose.evaluation.functional import nearby_joints_nms
-
-# from mmpose.apis.inferencers import MMPoseInferencer
 from mmpose.structures import PoseDataSample
 from mmpose.structures.bbox import bbox_xywh2xyxy
 from PIL import Image
-import torch.multiprocessing as mp
 
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
 from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader
@@ -37,7 +36,7 @@ class PoseEstimator:
         max_objects_per_inference: int = 75,
         use_fp_16: bool = False,
         run_parallel: bool = False,
-        distributed_rank: Optional[int] = None,
+        run_distributed: bool = False,
         compile_model: bool = False,
     ):
         logger.info("Initializing pose estimator...")
@@ -56,10 +55,15 @@ class PoseEstimator:
         self.max_objects_per_inference = max_objects_per_inference
         self.use_fp_16 = use_fp_16
         self.run_parallel = run_parallel
-        self.distributed_rank = distributed_rank
-        if self.distributed_rank is not None:
-            self.device = torch.device(type="cpu")
+        self.run_distributed = run_distributed
         self.compile_model = compile_model
+
+        self.distributed_rank: int = -1
+        self.distributed_world_size: int = -1
+        if self.run_distributed:
+            # self.device = torch.device(type="cpu")
+            self.distributed_rank = torch.distributed.get_rank()
+            self.distributed_world_size = torch.distributed.get_world_size()
 
         self.lock = mp.Lock()
 
@@ -76,7 +80,7 @@ class PoseEstimator:
             pose_estimator.share_memory()
 
             if self.use_fp_16:
-                self.pose_estimator = pose_estimator.half()  # .to(self.device)
+                self.pose_estimator = pose_estimator.half()
             else:
                 self.pose_estimator = pose_estimator
 
@@ -87,6 +91,21 @@ class PoseEstimator:
                 self.pose_estimator = torch.compile(
                     self.pose_estimator, mode="max-autotune"
                 )
+                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
+                # self.pose_estimator = torch.compile(
+                #     self.pose_estimator,
+                #     backend="torch_tensorrt",
+                #     dynamic=False,
+                #     options={
+                #         "truncate_long_and_double": True,
+                #         "precision": torch.half,
+                #         # "debug": True,
+                #         "min_block_size": 10,
+                #         # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
+                #         "optimization_level": 5,
+                #         "use_python_runtime": False
+                #     }
+                # )
                 logger.info("Finished compiling pose estimator model")
 
             if self.run_parallel:
@@ -95,9 +114,17 @@ class PoseEstimator:
                     device_ids=list(range(torch.cuda.device_count())),
                     output_device=self.device,  # torch.device("cpu")
                 )
-            elif self.distributed_rank is not None:
+            elif self.run_distributed:
+                logger.info(
+                    f"Configuring pose estimator model for DDP (DistributedDataParallel) on device {self.distributed_rank}..."
+                )
                 self.pose_estimator = MMDistributedDataParallel(
-                    self.pose_estimator, device_ids=[self.distributed_rank]
+                    self.pose_estimator,
+                    device_ids=[self.distributed_rank],
+                    output_device=self.distributed_rank,
+                )
+                logger.info(
+                    f"Finished configuring pose estimator model for DDP on device {self.distributed_rank}"
                 )
 
         else:  # TensorRT
@@ -118,13 +145,13 @@ class PoseEstimator:
         self.dataset_meta = dataset_meta_from_config(
             self.model_config, dataset_mode="train"
         )
-        # TODO: Solve issue with compiled model not being serializable
-        # self.pose_estimator = torch.compile(self.pose_estimator)
+        self._batch_count = mp.Value("i", 0)
         self._frame_count = mp.Value(
             "i", 0
-        )  # Each frame contains multiple boxes, so we track frames separately
+        )  # Each frame contains multiple boxes, so we track frames separately from inferences
         self._inference_count = mp.Value("i", 0)
-        self._processing_start_time = mp.Value("d", -1.0)
+        self._start_time = mp.Value("d", -1.0)
+        self._stop_time = mp.Value("d", -1.0)
         self._first_inference_time = mp.Value("d", -1.0)
         self._time_waiting = mp.Value("d", 0)
 
@@ -139,12 +166,38 @@ class PoseEstimator:
         return self._inference_count.value
 
     @property
-    def processing_start_time(self) -> float:
-        return self._processing_start_time.value
+    def start_time(self) -> float:
+        return self._start_time.value
+
+    @property
+    def stop_time(self) -> float:
+        return self._stop_time.value
 
     @property
     def first_inference_time(self) -> float:
         return self._first_inference_time.value
+
+    @property
+    def running_time_from_start(self) -> float:
+        if self.start_time == -1:
+            return 0
+
+        current_time_or_stop_time = time.time()
+        if self.stop_time > -1.0:
+            current_time_or_stop_time = self.stop_time
+
+        return current_time_or_stop_time - self.start_time
+
+    @property
+    def running_time_from_first_inference(self) -> float:
+        if self.first_inference_time == -1:
+            return 0
+
+        current_time_or_stop_time = time.time()
+        if self.stop_time > -1.0:
+            current_time_or_stop_time = self.stop_time
+
+        return current_time_or_stop_time - self.first_inference_time
 
     @property
     def time_waiting(self) -> int:
@@ -235,7 +288,7 @@ class PoseEstimator:
         if total_pre_processing_time == 0:
             records_per_second = "N/A"
         else:
-            records_per_second = {round(len(data_list) / total_pre_processing_time, 2)}
+            records_per_second = round(len(data_list) / total_pre_processing_time, 2)
 
         logger.info(
             f"Pose estimator data pipeline pre-processing time: {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
@@ -310,18 +363,25 @@ class PoseEstimator:
         is_topdown = False
 
         last_loop_start_time = time.time()
-        self._processing_start_time.value = last_loop_start_time
-        for batch_idx, data in enumerate(loader):
+        self._start_time.value = last_loop_start_time
+        for instance_batch_idx, data in enumerate(loader):
             current_loop_time = time.time()
+
+            global_batch_idx = instance_batch_idx
+            with self._batch_count.get_lock():
+                self._batch_count.value += 1
+                global_batch_idx = instance_batch_idx
+
             self._time_waiting.value += current_loop_time - last_loop_start_time
 
-            if self._first_inference_time.value == -1:
-                self._first_inference_time.value = current_loop_time
+            with self._first_inference_time.get_lock():
+                if self._first_inference_time.value == -1:
+                    self._first_inference_time.value = current_loop_time
 
-            if type(loader) == BoundingBoxesDataLoader:
+            if isinstance(loader, BoundingBoxesDataLoader):
                 is_topdown = True
                 (bboxes, frames, meta) = data
-            elif type(loader) == VideoFramesDataLoader:
+            elif isinstance(loader, VideoFramesDataLoader):
                 bboxes = None
                 (frames, meta) = data
             else:
@@ -331,7 +391,7 @@ class PoseEstimator:
 
             try:
                 logger.info(
-                    f"Processing pose estimation batch #{batch_idx} - Includes {len(frames)} frames"
+                    f"Processing pose estimation batch #{global_batch_idx} - Includes {len(frames)} frames"
                 )
 
                 self._frame_count.value += len(frames)
@@ -348,7 +408,11 @@ class PoseEstimator:
 
                 # TODO: Update inference_topdown to work with Tensors
 
-                with torch.cuda.amp.autocast() if self.use_fp_16 and not self.using_tensort else nullcontext():
+                with (
+                    torch.cuda.amp.autocast()
+                    if self.use_fp_16 and not self.using_tensort
+                    else nullcontext()
+                ):
                     inference_type = "topdown" if is_topdown else "onestage"
                     pose_results = self.inference(
                         inference_type=inference_type,
@@ -378,10 +442,10 @@ class PoseEstimator:
 
                             prediction_indicies = nearby_joints_nms(
                                 [
-                                    dict(
-                                        keypoints=pose_result_keypoints[i],
-                                        score=pose_result_scores[i],
-                                    )
+                                    {
+                                        "keypoints": pose_result_keypoints[i],
+                                        "score": pose_result_scores[i],
+                                    }
                                     for i in range(len(pose_result_keypoints))
                                 ],
                                 num_nearby_joints_thr=num_keypoints // 3,
@@ -405,7 +469,7 @@ class PoseEstimator:
                 # TODO: Optimize this method for extracting results and preparing them for the pose queue
                 start_prepare_results_for_yield_time = time.time()
                 if pose_results and len(pose_results) > 0:
-                    for idx, pose_result in enumerate(pose_results):
+                    for _, pose_result in enumerate(pose_results):
                         if pose_result is None or len(pose_result.pred_instances) == 0:
                             continue
 
@@ -462,17 +526,17 @@ class PoseEstimator:
                             )
 
                 logger.info(
-                    f"Pose estimation batch #{batch_idx} prepare results for yield time: {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
+                    f"Pose estimation batch #{global_batch_idx} prepare results for yield time: {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
                 )
 
                 start_yield_results_time = time.time()
                 yield poses_to_yield
                 logger.info(
-                    f"Pose estimation batch #{batch_idx} yield time: {round(time.time() - start_yield_results_time, 2)} seconds"
+                    f"Pose estimation batch #{global_batch_idx} yield time: {round(time.time() - start_yield_results_time, 2)} seconds"
                 )
 
                 logger.info(
-                    f"Completed pose estimation batch #{batch_idx} - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds"
+                    f"Completed pose estimation batch #{global_batch_idx} - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds"
                 )
             finally:
                 del bboxes
@@ -480,6 +544,8 @@ class PoseEstimator:
                 del meta
 
             last_loop_start_time = time.time()
+
+        self._stop_time.value = time.time()
 
     def __del__(self):
         if self.pose_estimator is not None:

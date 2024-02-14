@@ -2,8 +2,6 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-import torch
-from torch.distributed import init_process_group, destroy_process_group
 import torch.multiprocessing as mp
 
 from pose_db_io import PoseHandle
@@ -14,28 +12,7 @@ from .log import logger
 from .pipeline import Pipeline
 
 
-def ddp_setup(rank, world_size):
-    """
-    Set up the distributed environment.
-
-    Args:
-        rank: The rank of the current process. Unique identifier for each process in the distributed training.
-        world_size: Total number of processes participating in the distributed training.
-    """
-    # Initialize the process group.
-    # 'backend' specifies the communication backend to be used, "nccl" is optimized for GPU training.
-    init_process_group(
-        rank=rank, world_size=world_size
-    )  # Try NOT specifiying a backend for now
-
-    # Set the current CUDA device to the specified device (identified by rank).
-    # This ensures that each process uses a different GPU in a multi-GPU setup.
-    torch.cuda.set_device(rank)
-
-
 def _run(
-    rank: int,
-    world_size: int,
     environment: str,
     start: datetime,
     end: datetime,
@@ -43,20 +20,19 @@ def _run(
     pose_model: Optional[PoseModel],
     run_parallel: bool = False,
     run_distributed: bool = False,
+    detector_max_objects_per_inference: Optional[int] = None,
+    pose_estimator_max_objects_per_inference: Optional[int] = None,
 ):
-    distributed_rank = None
-    if run_distributed:
-        ddp_setup(rank, world_size)
-        distributed_rank = rank
-
     p = Pipeline(
         detector_model=detector_model,
-        detector_device="cuda:1",
+        detector_device="cuda:0",
         pose_estimator_model=pose_model,
-        pose_estimator_device="cuda:0",
+        pose_estimator_device="cuda:1",
         use_fp_16=True,
         run_parallel=run_parallel,
-        distributed_rank=distributed_rank,
+        run_distributed=run_distributed,
+        detector_max_objects_per_inference=detector_max_objects_per_inference,
+        pose_estimator_max_objects_per_inference=pose_estimator_max_objects_per_inference,
     )
     p.run(
         environment=environment,
@@ -66,55 +42,56 @@ def _run(
 
 
 def run(environment: str, start: datetime, end: datetime):
-    run_distributed = False
     run_parallel = False
-    detector_model = DetectorModel.rtmdet_medium()
-    pose_model = PoseModel.rtmpose_large_384()
 
-    # TensorRT models
+    ###########################
+    # Standard top-down model
+    ###########################
+    # run_distributed = False
+    # detector_max_objects_per_inference = 110
+    # pose_estimator_max_objects_per_inference = 350
+    # detector_model = DetectorModel.rtmdet_medium()
+    # pose_model = PoseModel.rtmpose_large_384()
+
+    ###########################
+    # TensorRT top-down model
+    ###########################
+    # run_distributed = False
+    # detector_max_objects_per_inference = 110
+    # pose_estimator_max_objects_per_inference = 350
     # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
     # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_fp16_batch()
     # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
 
-    # Single pass pose model
+    ###########################
+    # One-stage model (RTMPose Large)
+    ###########################
+    run_distributed = True
+    detector_model = None
+    detector_max_objects_per_inference = None
+    pose_estimator_max_objects_per_inference = 118
+    pose_model = PoseModel.rtmo_large()
+
+    ###########################
+    # One-stage model (RTMPose Medium)
+    ###########################
+    # run_distributed = True
     # detector_model = None
-    # pose_model = PoseModel.rtmo_large()
+    # detector_max_objects_per_inference = None
+    # pose_estimator_max_objects_per_inference = 146
     # pose_model = PoseModel.rtmo_medium()
 
-    if run_distributed:
-        world_size = torch.cuda.device_count()
-    else:
-        world_size = 1
-
-    mp.spawn(
-        _run,
-        args=(
-            world_size,
-            environment,
-            start,
-            end,
-            detector_model,
-            pose_model,
-            run_parallel,
-            run_distributed,
-        ),
-        nprocs=world_size,
+    _run(
+        environment=environment,
+        start=start,
+        end=end,
+        detector_model=detector_model,
+        pose_model=pose_model,
+        run_parallel=run_parallel,
+        run_distributed=run_distributed,
+        detector_max_objects_per_inference=detector_max_objects_per_inference,
+        pose_estimator_max_objects_per_inference=pose_estimator_max_objects_per_inference,
     )
-
-    # if run_distributed:
-    #     world_size = torch.cuda.device_count()
-    #     mp.spawn(
-    #         _run,
-    #         args=(world_size, environment, start, end, detector_model, pose_model, run_parallel, run_distributed),
-    #         nprocs=world_size,
-    #     )
-    # else:
-    #     world_size = 1
-    #     rank = 1
-    #     _run(
-
-    #         rank, world_size, environment, start, end, detector_model, pose_model, run_parallel, run_distributed
-    #     )
 
 
 def batch():
@@ -126,7 +103,7 @@ def batch():
     #############################################################################
     # Prepare the batch data (the time segments that poses should be generated for)
     #############################################################################
-    batch = [
+    batch_data = [
         ["dahlia", "2023-06-30 20:32:46+00:00", "2023-06-30 20:34:58+00:00"],
         ["dahlia", "2023-06-30 20:35:14+00:00", "2023-06-30 20:43:45+00:00"],
         ["dahlia", "2023-06-30 20:44:59+00:00", "2023-06-30 21:34:00+00:00"],
@@ -148,18 +125,18 @@ def batch():
         # ["dahlia", "2023-07-20 23:17:15+00:00", "2023-07-20 23:17:40+00:00"],
         # ["dahlia", "2023-07-20 23:18:03+00:00", "2023-07-20 23:25:51+00:00"],
     ]
-    batch = list(
+    batch_data = list(
         map(
             lambda v: [
                 v[0],
                 datetime.fromisoformat(v[1]),
                 datetime.fromisoformat(v[2]),
             ],
-            batch,
+            batch_data,
         )
     )
     df_batch = pd.DataFrame(
-        batch,
+        batch_data,
         columns=["environment_name", "start", "end"],
     )
     df_batch["start"] = df_batch["start"] - timedelta(seconds=10)
@@ -225,15 +202,15 @@ def batch():
                 if environment != s["environment_name"]:
                     continue
 
-                if start < s["start"] and (end >= s["start"] and end <= s["end"]):
+                if start < s["start"] and s["start"] <= end <= s["end"]:
                     s["start"] = start
                     merged = True
                     break
-                elif end > s["end"] and (start >= s["start"] and start <= s["end"]):
+                if end > s["end"] and s["start"] <= start <= s["end"]:
                     s["end"] = end
                     merged = True
                     break
-                elif start >= s["start"] and end <= s["end"]:
+                if start >= s["start"] and end <= s["end"]:
                     merged = True
                     break
 

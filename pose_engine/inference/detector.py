@@ -11,12 +11,14 @@ from mmdet.apis.inference import ImagesType
 from mmdet.structures import DetDataSample, SampleList
 from mmdet.utils import get_test_pipeline_cfg
 from mmpose.utils import adapt_mmdet_pipeline
+
 import numpy as np
 import torch
-from torch import nn
 import torch.multiprocessing as mp
 import torch.utils.data
 import torchvision.ops
+
+# import torch_tensorrt
 
 from pose_engine.log import logger
 
@@ -31,6 +33,8 @@ class Detector:
         nms_iou_threshold=0.3,
         bbox_threshold=0.3,
         use_fp_16=False,
+        max_objects_per_inference=100,
+        compile_model: bool = False,
     ):
         logger.info("Initializing object detector...")
 
@@ -45,6 +49,10 @@ class Detector:
         self.deployment_config = None
 
         self.use_fp_16 = use_fp_16
+
+        self.max_objects_per_inference = max_objects_per_inference
+
+        self.compile_model = compile_model
 
         self.lock = mp.Lock()
 
@@ -63,9 +71,25 @@ class Detector:
 
             self.model_config = detector.cfg
 
-            logger.info("Compiling detector model...")
-            self.detector = torch.compile(self.detector, mode="max-autotune")
-            logger.info("Finished compiling detector model")
+            if self.compile_model:
+                logger.info("Compiling detector model...")
+                self.detector = torch.compile(self.detector, mode="max-autotune")
+                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
+                # self.detector = torch.compile(
+                #     self.detector,
+                #     backend="torch_tensorrt",
+                #     dynamic=False,
+                #     options={
+                #         "truncate_long_and_double": True,
+                #         "precision": torch.half,
+                #         # "debug": True,
+                #         # "min_block_size": 2,
+                #         # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
+                #         "optimization_level": 5,
+                #         "use_python_runtime": False
+                #     }
+                # )
+                logger.info("Finished compiling detector model")
 
         else:  # TensorRT
             self.model_config, self.deployment_config = load_config(
@@ -86,14 +110,12 @@ class Detector:
         self.pipeline[0].type = "mmdet.LoadImageFromNDArray"
         self.pipeline = Compose(self.pipeline)
 
-        # TODO: Solve issue with compiled model not being serializable
-        # self.detector = torch.compile(self.detector)
-
         self.nms_iou_threshold = nms_iou_threshold
         self.bbox_threshold = bbox_threshold
 
         self._inference_count = mp.Value("i", 0)
-        self._processing_start_time = mp.Value("d", -1.0)
+        self._start_time = mp.Value("d", -1.0)
+        self._stop_time = mp.Value("d", -1.0)
         self._first_inference_time = mp.Value("d", -1.0)
         self._time_waiting = mp.Value("d", 0)
 
@@ -104,12 +126,38 @@ class Detector:
         return self._inference_count.value
 
     @property
-    def processing_start_time(self) -> float:
-        return self._processing_start_time.value
+    def start_time(self) -> float:
+        return self._start_time.value
+
+    @property
+    def stop_time(self) -> float:
+        return self._stop_time.value
 
     @property
     def first_inference_time(self) -> float:
         return self._first_inference_time.value
+
+    @property
+    def running_time_from_start(self) -> float:
+        if self.start_time == -1:
+            return 0
+
+        current_time_or_stop_time = time.time()
+        if self.stop_time > -1.0:
+            current_time_or_stop_time = self.stop_time
+
+        return current_time_or_stop_time - self.start_time
+
+    @property
+    def running_time_from_first_inference(self) -> float:
+        if self.first_inference_time == -1:
+            return 0
+
+        current_time_or_stop_time = time.time()
+        if self.stop_time > -1.0:
+            current_time_or_stop_time = self.stop_time
+
+        return current_time_or_stop_time - self.first_inference_time
 
     @property
     def time_waiting(self) -> int:
@@ -117,19 +165,15 @@ class Detector:
 
     def inference_detector(
         self,
-        # model: nn.Module,
         imgs: ImagesType,
-        test_pipeline: Optional[Compose] = None,
         text_prompt: Optional[str] = None,
         custom_entities: bool = False,
     ) -> Union[DetDataSample, SampleList]:
         """Custom inference image(s) with the detector. This allows true batch processing.
 
         Args:
-            model (nn.Module): The loaded detector.
             imgs (str, ndarray, Sequence[str/ndarray]):
             Either image files or loaded images.
-            test_pipeline (:obj:`Compose`): Test pipeline.
 
         Returns:
             :obj:`DetDataSample` or list[:obj:`DetDataSample`]:
@@ -193,7 +237,7 @@ class Detector:
         :rtype: generator
         """
         last_loop_start_time = time.time()
-        self._processing_start_time.value = last_loop_start_time
+        self._start_time.value = last_loop_start_time
         for batch_idx, (frames, meta) in enumerate(loader):
             current_loop_time = time.time()
             self._time_waiting.value += current_loop_time - last_loop_start_time
@@ -205,29 +249,37 @@ class Detector:
                 logger.debug(
                     f"Processing detector batch #{batch_idx} - Includes {len(frames)} frames"
                 )
+                all_det_results = []
                 meta_as_list_of_dicts = []
-                for idx in range(len(frames)):
-                    meta_item = {}
-                    for key in meta.keys():
-                        meta_item[key] = meta[key][idx]
-
-                    meta_as_list_of_dicts.append(meta_item)
-
-                list_np_imgs = list(
-                    frames.cpu().detach().numpy()
-                )  # Annoying we have to move frames/images to the CPU to run detector
-
-                self.lock.acquire()
-                with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
-                    det_results = self.inference_detector(
-                        # model=self.detector,
-                        imgs=list_np_imgs
+                chunk_size = self.max_objects_per_inference
+                for chunk_ii in range(0, len(frames), chunk_size):
+                    sub_frames = frames[chunk_ii : chunk_ii + chunk_size]
+                    logger.debug(
+                        f"Running detections against {len(sub_frames)} frames..."
                     )
-                self.lock.release()
+                    for idx in range(len(sub_frames)):
+                        meta_item = {}
+                        for key in meta.keys():
+                            meta_item[key] = meta[key][idx]
 
-                self._inference_count.value += len(frames)
+                        meta_as_list_of_dicts.append(meta_item)
 
-                for idx, det_result in enumerate(det_results):
+                    list_np_imgs = list(
+                        frames.cpu().detach().numpy()
+                    )  # Annoying we have to move frames/images to the CPU to run detector
+
+                    self.lock.acquire()
+                    with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
+                        det_results = self.inference_detector(
+                            # model=self.detector,
+                            imgs=list_np_imgs
+                        )
+                        all_det_results = [*all_det_results, *det_results]
+                    self.lock.release()
+
+                    self._inference_count.value += len(sub_frames)
+
+                for idx, det_result in enumerate(all_det_results):
                     frame = frames[idx]
                     meta_dictionary = meta_as_list_of_dicts[idx]
 
@@ -271,6 +323,8 @@ class Detector:
                 del frames
 
             last_loop_start_time = time.time()
+
+        self._stop_time.value = time.time()
 
     def __del__(self):
         del self.detector

@@ -7,17 +7,18 @@ from zoneinfo import ZoneInfo
 import torch.multiprocessing as mp
 
 import honeycomb_io
-from mmengine.dataset import InfiniteSampler
 from pose_db_io.handle.models import pose_2d
 
 from .known_inference_models import DetectorModel, PoseModel
-from .log import logger
 from . import loaders
 from .process_detection import ProcessDetection
 from .process_pose_estimation import ProcessPoseEstimation
 from .process_status_poll import ProcessStatusPoll
 from .process_store_poses import ProcessStorePoses
 from .video import VideoFetch
+
+DETECTOR_MAX_OBJECTS_PER_INFERENCE = 100
+POSE_ESTIMATOR_MAX_OBJECTS_PER_INFERENCE = 350
 
 
 class Pipeline:
@@ -30,7 +31,13 @@ class Pipeline:
         pose_estimator_device: str = "cpu",
         use_fp_16: bool = False,
         run_parallel: bool = False,
-        distributed_rank: Optional[int] = None,
+        run_distributed: bool = False,
+        detector_max_objects_per_inference: Optional[
+            int
+        ] = DETECTOR_MAX_OBJECTS_PER_INFERENCE,
+        pose_estimator_max_objects_per_inference: Optional[
+            int
+        ] = POSE_ESTIMATOR_MAX_OBJECTS_PER_INFERENCE,
     ):
         if (
             detector_model is None
@@ -45,15 +52,28 @@ class Pipeline:
         self.pose_estimator_model: PoseModel = pose_estimator_model
         self.detector_device: str = detector_device
         self.pose_estimator_device: str = pose_estimator_device
-        self.use_fp_16 = use_fp_16
-        self.distributed_rank = distributed_rank
-        self.video_frames_sampler = None
+        self.use_fp_16: bool = use_fp_16
+        self.run_distributed: bool = run_distributed
+
+        if detector_max_objects_per_inference is None:
+            self.detector_max_objects_per_inference = DETECTOR_MAX_OBJECTS_PER_INFERENCE
+        else:
+            self.detector_max_objects_per_inference = detector_max_objects_per_inference
+
+        if pose_estimator_max_objects_per_inference is None:
+            self.pose_estimator_max_objects_per_inference = (
+                POSE_ESTIMATOR_MAX_OBJECTS_PER_INFERENCE
+            )
+        else:
+            self.pose_estimator_max_objects_per_inference = (
+                pose_estimator_max_objects_per_inference
+            )
 
         if (
             self.pose_estimator_model.pose_estimator_type
             == pose_2d.PoseEstimatorType.top_down
-        ) or self.distributed_rank is not None:
-            # Don't allow models to run distributed when using topdown or the model is being run distributed
+        ) or self.run_distributed:
+            # Don't allow models to run parallel when using topdown or the model is being run distributed
             self.run_parallel = False
         else:
             self.run_parallel = run_parallel
@@ -62,27 +82,28 @@ class Pipeline:
         if self.mp_manager is None:
             self.mp_manager = mp.Manager()
 
+        self.environment: Optional[str] = None
         self.environment_id: Optional[str] = None
         self.environment_name: Optional[str] = None
         self.environment_timezone: Optional[ZoneInfo] = None
 
+        self.start_datetime: Optional[datetime] = None
+        self.end_datetime: Optional[datetime] = None
+
         self.current_run_start_time: Optional[datetime] = None
         self.current_run_inference_id: Optional[uuid.UUID] = None
 
-        self.pose_estimator = None
-        self.detector = None
+        self.video_frame_dataset: Optional[loaders.VideoFramesDataset] = None
+        self.video_frames_loader: Optional[loaders.VideoFramesDataLoader] = None
+        self.bbox_dataset: Optional[loaders.BoundingBoxesDataset] = None
+        self.bboxes_loader: Optional[loaders.BoundingBoxesDataLoader] = None
+        self.poses_dataset: Optional[loaders.PosesDataset] = None
+        self.poses_loader: Optional[loaders.PosesDataLoader] = None
 
-        self.video_frame_dataset = None
-        self.video_frames_loader = None
-        self.bbox_dataset = None
-        self.bbox_loader = None
-        self.poses_dataset = None
-        self.poses_loader = None
-
-        self.detection_process = None
-        self.pose_estimation_process = None
-        self.store_poses_process = None
-        self.status_poll_process = None
+        self.detection_process: Optional[ProcessDetection] = None
+        self.pose_estimation_process: Optional[ProcessPoseEstimation] = None
+        self.store_poses_process: Optional[ProcessStorePoses] = None
+        self.status_poll_process: Optional[ProcessStatusPoll] = None
 
     def _load_environment(self):
         df_all_environments = honeycomb_io.fetch_all_environments(
@@ -110,36 +131,47 @@ class Pipeline:
         )
 
     def _init_dataloaders(self):
+        # Top-down model's detector is responsible for handling images
+        # Bottom-up and one-stage model's pose estimator is responsible for handling images
+        if (
+            self.pose_estimator_model.pose_estimator_type
+            == pose_2d.PoseEstimatorType.top_down
+        ):
+            video_frame_dataloader_batch_size = self.detector_max_objects_per_inference
+        else:
+            video_frame_dataloader_batch_size = (
+                self.pose_estimator_max_objects_per_inference
+            )
+
+        bouding_box_dataloader_batch_size = (
+            self.pose_estimator_max_objects_per_inference
+        )
+
         self.video_frame_dataset = loaders.VideoFramesDataset(
-            frame_queue_maxsize=300,
-            wait_for_video_files=False,
+            frame_queue_maxsize=1000,
+            wait_for_video_files=True,
             mp_manager=self.mp_manager,
             filter_min_datetime=self.start_datetime,
             filter_max_datetime=self.end_datetime,
         )
-        if self.distributed_rank is not None:
-            self.video_frames_sampler = InfiniteSampler(
-                self.video_frame_dataset, shuffle=False
-            )
 
         self.video_frames_loader = loaders.VideoFramesDataLoader(
             dataset=self.video_frame_dataset,
             device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
             shuffle=False,
-            num_workers=1,
-            batch_size=140,
+            num_workers=2,
+            batch_size=video_frame_dataloader_batch_size,
             pin_memory=True,
-            sampler=self.video_frames_sampler,
         )
 
         self.bbox_dataset = loaders.BoundingBoxesDataset(
-            bbox_queue_maxsize=200, wait_for_bboxes=True, mp_manager=self.mp_manager
+            bbox_queue_maxsize=600, wait_for_bboxes=True, mp_manager=self.mp_manager
         )
         self.bboxes_loader = loaders.BoundingBoxesDataLoader(
             dataset=self.bbox_dataset,
             shuffle=False,
             num_workers=0,
-            batch_size=100,  # 60
+            batch_size=bouding_box_dataloader_batch_size,
             pin_memory=True,
         )
 
@@ -170,6 +202,7 @@ class Pipeline:
                 output_bbox_dataset=self.bbox_dataset,
                 device=self.detector_device,
                 use_fp_16=self.use_fp_16,
+                max_objects_per_inference=self.detector_max_objects_per_inference,
             )
         else:
             pose_estimator_data_loader = self.video_frames_loader
@@ -181,8 +214,8 @@ class Pipeline:
             device=self.pose_estimator_device,
             use_fp_16=self.use_fp_16,
             run_parallel=self.run_parallel,
-            distributed_rank=self.distributed_rank,
-            max_objects_per_inference=140,
+            run_distributed=self.run_distributed,
+            max_objects_per_inference=self.pose_estimator_max_objects_per_inference,
         )
 
         self.store_poses_process = ProcessStorePoses(
@@ -211,6 +244,10 @@ class Pipeline:
         for raw_video in raw_videos:
             self.video_frames_loader.dataset.add_data_object(raw_video)
 
+        # Load the frames
+        # self.video_frames_loader.dataset.start_video_loader()
+        # for _ in self.video_frames_loader:
+
     def start(self):
         bounding_box_format_enum = (
             self.detector_model.bounding_box_format_enum
@@ -226,15 +263,17 @@ class Pipeline:
                 self.environment_timezone
             ).strftime("%Y-%m-%d"),
             bounding_box_format=bounding_box_format_enum,
-            detection_model_config=self.detector_model.model_config_enum
-            if self.detector_model
-            else None,
-            detection_model_checkpoint=self.detector_model.checkpoint_enum
-            if self.detector_model
-            else None,
-            detection_model_deployment_config=self.detector_model.deployment_config_enum
-            if self.detector_model
-            else None,
+            detection_model_config=(
+                self.detector_model.model_config_enum if self.detector_model else None
+            ),
+            detection_model_checkpoint=(
+                self.detector_model.checkpoint_enum if self.detector_model else None
+            ),
+            detection_model_deployment_config=(
+                self.detector_model.deployment_config_enum
+                if self.detector_model
+                else None
+            ),
             keypoints_format=self.pose_estimator_model.keypoint_format_enum,
             pose_model_config=self.pose_estimator_model.model_config_enum,
             pose_model_checkpoint=self.pose_estimator_model.checkpoint_enum,
@@ -249,6 +288,7 @@ class Pipeline:
 
         self.status_poll_process.start()
 
+        self.current_run_inference_id = uuid.uuid4()
         self.current_run_start_time = time.time()
 
     def wait(self):
@@ -295,7 +335,3 @@ class Pipeline:
             del self.pose_estimation_process
         if self.detection_process is not None:
             del self.detection_process
-        if self.pose_estimator is not None:
-            del self.pose_estimator
-        if self.detector is not None:
-            del self.detector

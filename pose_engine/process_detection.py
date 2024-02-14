@@ -1,3 +1,4 @@
+from multiprocessing import sharedctypes
 from typing import Optional
 
 import torch.multiprocessing as mp
@@ -17,10 +18,12 @@ class ProcessDetection:
         output_bbox_dataset: BoundingBoxesDataset,
         use_fp_16: bool = False,
         device: str = "cpu",
+        max_objects_per_inference: int = 100,
     ):
         self.detector_model: DetectorModel = detector_model
         self.device = device
         self.use_fp_16 = use_fp_16
+        self.max_objects_per_inference = max_objects_per_inference
 
         self.input_video_frames_loader: VideoFramesDataLoader = (
             input_video_frames_loader
@@ -29,10 +32,15 @@ class ProcessDetection:
 
         self.process: Optional[mp.Process] = None
 
-        self._inference_count = mp.Value("i", 0)
-        self._processing_start_time = mp.Value("d", -1.0)
-        self._first_inference_time = mp.Value("d", -1.0)
-        self._time_waiting = mp.Value("d", 0)
+        self._inference_count: sharedctypes.Synchronized = mp.Value("i", 0)
+        self._start_time: sharedctypes.Synchronized = mp.Value("d", -1.0)
+        self._stop_time: sharedctypes.Synchronized = mp.Value("d", -1.0)
+        self._running_time_from_start: sharedctypes.Synchronized = mp.Value("d", -1.0)
+        self._running_time_from_first_inference: sharedctypes.Synchronized = mp.Value(
+            "d", -1.0
+        )
+        self._first_inference_time: sharedctypes.Synchronized = mp.Value("d", -1.0)
+        self._time_waiting: sharedctypes.Synchronized = mp.Value("d", 0)
 
     @property
     def inference_count(self) -> int:
@@ -43,8 +51,20 @@ class ProcessDetection:
         return self._first_inference_time.value
 
     @property
-    def processing_start_time(self) -> float:
-        return self._processing_start_time.value
+    def start_time(self) -> float:
+        return self._start_time.value
+
+    @property
+    def stop_time(self) -> float:
+        return self._stop_time.value
+
+    @property
+    def running_time_from_start(self) -> float:
+        return self._running_time_from_start.value
+
+    @property
+    def running_time_from_first_inference(self) -> float:
+        return self._running_time_from_first_inference.value
 
     @property
     def time_waiting(self) -> int:
@@ -79,6 +99,7 @@ class ProcessDetection:
                 deployment_config_path=self.detector_model.deployment_config,
                 device=self.device,
                 use_fp_16=self.use_fp_16,
+                max_objects_per_inference=self.max_objects_per_inference,
             )
 
             logger.info("Running ProcessDetection service...")
@@ -86,7 +107,12 @@ class ProcessDetection:
                 loader=self.input_video_frames_loader
             ):
                 self._inference_count.value = detector.inference_count
-                self._processing_start_time.value = detector.processing_start_time
+                self._start_time.value = detector.start_time
+                self._stop_time.value = detector.stop_time
+                self._running_time_from_first_inference.value = (
+                    detector.running_time_from_first_inference
+                )
+                self._running_time_from_start.value = detector.running_time_from_start
                 self._first_inference_time.value = detector.first_inference_time
                 self._time_waiting.value = detector.time_waiting
 

@@ -1,4 +1,5 @@
 from ctypes import c_bool
+from multiprocessing import sharedctypes
 import time
 import queue
 
@@ -18,12 +19,12 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
     ):
         super().__init__()
 
-        self.done_loading_dataset = mp.Value(c_bool, False)
+        self.done_loading_dataset: sharedctypes.Synchronized = mp.Value(c_bool, False)
 
         self.bbox_queue_maxsize = bbox_queue_maxsize
         self.wait_for_bboxes = wait_for_bboxes
 
-        self._queue_wait_time = mp.Value("d", 0)
+        self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
 
         if mp_manager is None:
             mp_manager = mp.Manager()
@@ -50,6 +51,7 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
                 (bboxes.clone().share_memory_(), frame.clone().share_memory_(), meta)
             )
 
+    @property
     def queue_wait_time(self):
         return self._queue_wait_time.value
 
@@ -77,7 +79,8 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
                     yield (bboxes, images, meta)
             except queue.Empty:
                 end_wait = time.time() - start_wait
-                self._queue_wait_time.value += end_wait
+                with self._queue_wait_time.get_lock():
+                    self._queue_wait_time.value += end_wait
 
                 # DO NOT REMOVE: the "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.bbox_queue.qsize() == 0:

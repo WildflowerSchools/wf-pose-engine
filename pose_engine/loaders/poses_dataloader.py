@@ -1,7 +1,5 @@
 import torch.utils.data
 
-from pose_engine.log import logger
-
 
 class PosesDataLoader(torch.utils.data.DataLoader):
     def __init__(self, *args, **kwargs):

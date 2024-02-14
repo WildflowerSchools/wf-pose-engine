@@ -86,46 +86,62 @@ def cli(env_file, profile):
 
         import yappi
 
-        use_system_profiler = False
-
         logger.warning("PROFILING MODE ONE")
+
+        use_system_profiler = False
         pr = None
         pr_output = None
         yappi_output = None
         if use_system_profiler:
             pr = cProfile.Profile()
             pr.enable()
-            pr_output = open("/tmp/pose_engine_cprofile.prof", "w")
+            # pylint: disable=R1732
+            pr_output = open(
+                file="/tmp/pose_engine_cprofile.prof", mode="w", encoding="utf-8"
+            )
         else:
             yappi.set_clock_type(
                 "wall"
             )  # Use set_clock_type("cput") for cpu time, use set_clock_type("wall") for wall time
             yappi.start()
-            yappi_output = open("/tmp/pose_engine_yappi_profile.txt", "w")
+            # pylint: disable=R1732
+            yappi_output = open(
+                file="/tmp/pose_engine_yappi_profile.txt", mode="w", encoding="utf-8"
+            )
 
-        def exit():
-            if pr is not None:
-                pr.disable()
-                pstats.Stats(pr, stream=pr_output).sort_stats(
-                    "cumulative"
-                ).print_stats()
-                pr_output.flush()
-                pr_output.close()
-            else:
-                yappi.stop()
-                threads = yappi.get_thread_stats()
-                threads.print_all(out=yappi_output)
-                for thread in threads:
-                    yappi_output.write(
-                        "\nFunction stats for (%s) (%d)" % (thread.name, thread.id)
-                    )
-                    yappi.get_func_stats(ctx_id=thread.id).print_all(out=yappi_output)
-                yappi_output.flush()
-                yappi_output.close()
+        def close_profiler():
+            try:
+                if pr is not None:
+                    pr.disable()
+                    if pr_output is not None:
+                        pstats.Stats(pr, stream=pr_output).sort_stats(
+                            "cumulative"
+                        ).print_stats()
 
-            logger.warning("Profiling completed")
+                if yappi_output is not None:
+                    yappi.stop()
+                    threads = yappi.get_thread_stats()
+                    # pylint: disable=E1101
+                    threads.print_all(out=yappi_output)
+                    for thread in threads:
+                        yappi_output.write(
+                            f"Function stats for ({thread.name}) ({thread.id})"
+                        )
+                        # pylint: disable=E1101
+                        yappi.get_func_stats(ctx_id=thread.id).print_all(
+                            out=yappi_output
+                        )
+            finally:
+                if pr_output is not None:
+                    pr_output.flush()
+                    pr_output.close()
+                if yappi_output is not None:
+                    yappi_output.flush()
+                    yappi_output.close()
 
-        atexit.register(exit)
+                logger.warning("Profiling completed")
+
+        atexit.register(close_profiler)
 
 
 @click.command(name="run", help="Generate and store poses from classroom video")

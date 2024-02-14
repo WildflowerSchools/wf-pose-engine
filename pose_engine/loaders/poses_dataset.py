@@ -1,4 +1,5 @@
 from ctypes import c_bool
+from multiprocessing import sharedctypes
 import queue
 import time
 
@@ -18,12 +19,12 @@ class PosesDataset(torch.utils.data.IterableDataset):
     ):
         super().__init__()
 
-        self.done_loading_dataset = mp.Value(c_bool, False)
+        self.done_loading_dataset: sharedctypes.Synchronized = mp.Value(c_bool, False)
 
         self.pose_queue_maxsize = pose_queue_maxsize
         self.wait_for_poses = wait_for_poses
 
-        self._queue_wait_time = mp.Value("d", 0)
+        self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
 
         if mp_manager is None:
             mp_manager = mp.Manager()
@@ -33,6 +34,7 @@ class PosesDataset(torch.utils.data.IterableDataset):
     def add_data_object(self, data_object):
         self.pose_queue.put(data_object)
 
+    @property
     def queue_wait_time(self):
         return self._queue_wait_time.value
 
@@ -63,7 +65,8 @@ class PosesDataset(torch.utils.data.IterableDataset):
                         yield t
             except queue.Empty:
                 end_wait = time.time() - start_wait
-                self._queue_wait_time.value += end_wait
+                with self._queue_wait_time.get_lock():
+                    self._queue_wait_time.value += end_wait
 
                 # DO NOT REMOVE: the "qsize()" assertion, this is important as the queue.Empty exception doesn't necessarily mean the queue is empty
                 if self.pose_queue.qsize() == 0:
