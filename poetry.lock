@@ -2599,6 +2599,7 @@ files = [
     {file = "PyYAML-6.0.1-cp311-cp311-win_amd64.whl", hash = "sha256:bf07ee2fef7014951eeb99f56f39c9bb4af143d8aa3c21b1677805985307da34"},
     {file = "PyYAML-6.0.1-cp312-cp312-macosx_10_9_x86_64.whl", hash = "sha256:855fb52b0dc35af121542a76b9a84f8d1cd886ea97c84703eaa6d88e37a2ad28"},
     {file = "PyYAML-6.0.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:40df9b996c2b73138957fe23a16a4f0ba614f4c0efce1e9406a184b6d07fa3a9"},
+    {file = "PyYAML-6.0.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a08c6f0fe150303c1c6b71ebcd7213c2858041a7e01975da3a99aed1e7a378ef"},
     {file = "PyYAML-6.0.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6c22bec3fbe2524cde73d7ada88f6566758a8f7227bfbf93a408a9d86bcc12a0"},
     {file = "PyYAML-6.0.1-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:8d4e9c88387b0f5c7d5f281e55304de64cf7f9c0021a3525bd3b1c542da3b0e4"},
     {file = "PyYAML-6.0.1-cp312-cp312-win32.whl", hash = "sha256:d483d2cdf104e7c9fa60c544d92981f12ad66a457afae824d146093b8c294c54"},
@@ -3339,13 +3340,13 @@ wf-gqlpycgen = ">=0.7.3"
 
 [[package]]
 name = "wf-pose-db-io"
-version = "0.1.1"
+version = "0.1.2"
 description = "Tools for working with data in Wildflower's pose database"
 optional = false
 python-versions = ">=3.9,<4.0"
 files = [
-    {file = "wf_pose_db_io-0.1.1-py3-none-any.whl", hash = "sha256:e74a918259591e95e36eaf72e8efa98c63e31737e8e03f2b1c7cf4d5ad039568"},
-    {file = "wf_pose_db_io-0.1.1.tar.gz", hash = "sha256:cb1460e5ff00b8f2843b6f3ac2c90fb3d9224bbc17ad9a53177be5dc3625b0a9"},
+    {file = "wf_pose_db_io-0.1.2-py3-none-any.whl", hash = "sha256:65be54c1312fe1576f65c2d6439c812c105423176aa38e07fd576eba1b7ba742"},
+    {file = "wf_pose_db_io-0.1.2.tar.gz", hash = "sha256:31c72d5fa51190dcc75439f607fbfe6eadbca682b034ae9edc9bdc5bb02d78a1"},
 ]
 
 [package.dependencies]
@@ -3506,4 +3507,4 @@ testing = ["big-O", "jaraco.functools", "jaraco.itertools", "more-itertools", "p
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11,<3.12"
-content-hash = "40f3bacd2077ceb0aef7d55f79b283c74faa792dd465455af671e01405a1076a"
+content-hash = "13823864d35973c80525de53519e1df532822d5a72800caba337010172272ef7"

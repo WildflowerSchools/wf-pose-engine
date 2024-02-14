@@ -65,7 +65,7 @@ class ProcessStorePoses:
                         )
                         pose_2d_batch.append(pose_2d)
 
-                    # mongo_handle.insert_poses_2d(pose_2d_batch)
+                    mongo_handle.insert_poses_2d(pose_2d_batch)
                 finally:
                     del poses
                     del bboxes
