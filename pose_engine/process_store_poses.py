@@ -12,6 +12,7 @@ from pose_db_io.handle.models.pose_2d import (
     BoundingBoxOutput,
 )
 
+from . import config
 from . import loaders
 from .log import logger
 
@@ -65,7 +66,8 @@ class ProcessStorePoses:
                         )
                         pose_2d_batch.append(pose_2d)
 
-                    mongo_handle.insert_poses_2d(pose_2d_batch)
+                    if config.Settings().STORE_POSES:
+                        mongo_handle.insert_poses_2d(pose_2d_batch)
                 finally:
                     del poses
                     del bboxes

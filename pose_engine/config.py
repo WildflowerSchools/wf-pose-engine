@@ -18,3 +18,5 @@ class Settings(pydantic_settings.BaseSettings):
     MONGO_POSE_URI: str = (
         "mongodb://pose-engine:iamaninsecurepassword@localhost:27017/poses?authSource=poses"
     )
+
+    STORE_POSES: bool = False

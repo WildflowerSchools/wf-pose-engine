@@ -1,6 +1,25 @@
 version: '3.8'
 
 services:
+  pose-engine:
+    build:
+      context: .
+      dockerfile: ./deployment/pose-engine/pose-engine.dockerfile
+    profiles: ["cli-only"]
+    networks:
+      - pose-engine-network
+    env_file:
+      - path: .docker.env
+        required: true
+    shm_size: 8gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  
   mongo:
     build:
       context: ./deployment/mongo

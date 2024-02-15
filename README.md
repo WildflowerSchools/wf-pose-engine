@@ -14,6 +14,33 @@ poetry run python -m pose_engine \
        --end 2023-11-10T14:10:35-0700
 ```
 
+## Run Pose Generation using Docker
+
+1. First build the container
+```
+just build-docker
+```
+
+2. Then create a .docker.env file in the project root and fill in the req'd vars
+```
+cp .env.template .docker.env
+```
+
+3. Then run the pose engine CLI service
+> Included is a volume mapping that exposes the local wf_pose_engine cache directory and the local mmLab's torch cache directory to the docker application's cache directory
+```
+docker compose -f stack.yml --profile cli-only \
+       run \
+       -v /home/${USER}/.cache/wf_pose_engine:/root/.cache/wf_pose_engine \
+       -v /home/${USER}/.cache/torch:/root/.cache/torch \
+       pose-engine \
+       --verbosity INFO \
+       run \
+       --environment dahlia \
+       --start 2023-09-20T17:30:00-0000 \
+       --end 2023-09-20T17:31:00-0000
+```
+
 ## Install Locally
 
 1. Setup python environment

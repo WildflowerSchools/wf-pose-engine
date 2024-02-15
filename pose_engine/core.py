@@ -6,6 +6,7 @@ import torch.multiprocessing as mp
 
 from pose_db_io import PoseHandle
 
+from . import config
 from .honeycomb_service import HoneycombCachingClient
 from .known_inference_models import DetectorModel, PoseModel
 from .log import logger

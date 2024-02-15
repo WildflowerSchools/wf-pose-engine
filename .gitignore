@@ -41,3 +41,4 @@ output/
 *.log
 sandbox
 checkpoints
+.docker.env
