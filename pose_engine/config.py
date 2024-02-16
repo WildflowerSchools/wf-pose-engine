@@ -7,7 +7,10 @@ APP_AUTHOR = "wildflower"
 
 class Settings(pydantic_settings.BaseSettings):
     model_config = pydantic_settings.SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        env_prefix="POSE_ENGINE",
     )
 
     USER_CACHE_DIR: str = platformdirs.user_cache_dir(

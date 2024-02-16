@@ -12,7 +12,7 @@ steps:
   environment:
     DRONE: "true"
   commands:
-  - echo -n v$DRONE_BUILD_NUMBER > .tags
+  - echo -n v$DRONE_BUILD_NUMBER,latest > .tags
   - cat .tags
 - name: docker-build
   image: plugins/docker
@@ -29,6 +29,7 @@ steps:
     password:
       from_secret: docker_password
     repo: wildflowerschools/wf-pose-engine
+    cache_from: wildflowerschools/wf-pose-engine:latest
 
 services:
   - name: docker

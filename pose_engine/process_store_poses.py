@@ -40,7 +40,11 @@ class ProcessStorePoses:
 
     def _run(self, common_metadata: Pose2dMetadataCommon):
         logger.info("Running ProcessStorePoses service...")
-        mongo_handle = PoseHandle()
+        should_store_poses = config.Settings().STORE_POSES
+
+        mongo_handle = None
+        if should_store_poses:
+            mongo_handle = PoseHandle()
 
         try:
             for _batch_idx, (poses, bboxes, meta) in enumerate(self.input_poses_loader):
@@ -66,14 +70,15 @@ class ProcessStorePoses:
                         )
                         pose_2d_batch.append(pose_2d)
 
-                    if config.Settings().STORE_POSES:
+                    if should_store_poses:
                         mongo_handle.insert_poses_2d(pose_2d_batch)
                 finally:
                     del poses
                     del bboxes
                     del meta
         finally:
-            mongo_handle.cleanup()
+            if mongo_handle is not None:
+                mongo_handle.cleanup()
 
         logger.info("ProcessStorePoses service loop ended")
 

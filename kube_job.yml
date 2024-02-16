@@ -1,0 +1,35 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wf-pose-engine-<<ENVIRONMENT>>-<<START>>-<<END>>
+  namespace: honeycomb
+spec:
+  template:
+    metadata:
+      annotations:
+        iam.amazonaws.com/role: honeycomb-role
+    spec:
+      containers:
+      - name: generate
+        image: wildflowerschools/wf-pose-engine:latest
+        envFrom:
+          - secretRef:
+              name: honeycomb-honeycomb_client-settings
+        env:
+        - name: POSE_ENGINE_RUN_ENVIRONMENT
+          value: greenbrier
+        - name: POSE_ENGINE_RUN_START
+          value: 2021-05-28T13:00:00
+        - name: POSE_ENGINE_RUN_END
+          value: 2021-05-28T21:00:00
+        volumeMounts:
+          - name: efs-pvc
+            mountPath: "/data"
+      restartPolicy: OnFailure
+      volumes:
+        - name: efs-pvc
+          persistentVolumeClaim:
+            claimName: efs
+  backoffLimit: 4
+

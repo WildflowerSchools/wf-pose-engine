@@ -44,6 +44,7 @@ def click_options_environment_start_end():
                 type=str,
                 required=True,
                 help="Accepts a single environment id UUID or environment name",
+                show_envvar=True,
             ),
             click.option(
                 "--start",
@@ -51,6 +52,7 @@ def click_options_environment_start_end():
                 required=True,
                 callback=timezone_aware,
                 help="Start time in supported datetime format",
+                show_envvar=True,
             ),
             click.option(
                 "--end",
@@ -58,19 +60,18 @@ def click_options_environment_start_end():
                 required=True,
                 callback=timezone_aware,
                 help="End time in supported datetime format",
+                show_envvar=True,
             ),
         ]
     )
 
 
-@click_log.simple_verbosity_option(logger)
-@click.group()
+@click_log.simple_verbosity_option(logger, show_envvar=True)
+@click.group(context_settings={"auto_envvar_prefix": "POSE_ENGINE"})
 @click.option(
-    "--env-file",
-    type=click.Path(exists=True),
-    help="env file path",
+    "--env-file", type=click.Path(exists=True), help="env file path", show_envvar=True
 )
-@click.option("--profile", is_flag=True)
+@click.option("--profile", is_flag=True, show_envvar=True)
 def cli(env_file, profile):
     if env_file is None:
         env_file = os.path.join(os.getcwd(), ".env")
