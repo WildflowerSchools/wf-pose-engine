@@ -1,0 +1,43 @@
+kind: pipeline
+type: kubernetes
+name: drone
+service_account_name: default
+
+metadata:
+  namespace: drone
+
+steps:
+- name: set-tag
+  image: python:3.11
+  environment:
+    DRONE: "true"
+  commands:
+  - echo -n v$DRONE_BUILD_NUMBER > .tags
+  - cat .tags
+- name: docker-build
+  image: plugins/docker
+  when:
+    branch:
+    - main
+    event:
+      exclude:
+      - pull_request
+  settings:
+    dockerfile: deployment/pose-engine/pose-engine.dockerfile
+    username:
+      from_secret: docker_username
+    password:
+      from_secret: docker_password
+    repo: wildflowerschools/wf-pose-engine
+
+services:
+  - name: docker
+    image: docker:dind
+    privileged: true
+    volumes:
+      - name: dockersock
+        path: /var/run
+
+volumes:
+  - name: dockersock
+    temp: {}
