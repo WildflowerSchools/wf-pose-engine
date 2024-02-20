@@ -3,33 +3,40 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: wf-pose-engine-<<ENVIRONMENT>>-<<START>>-<<END>>
-  namespace: honeycomb
+  namespace: pose-engine
 spec:
+  ttlSecondsAfterFinished: 10
   template:
-    metadata:
-      annotations:
-        iam.amazonaws.com/role: honeycomb-role
     spec:
+      tolerations:
+        - effect: NoSchedule
+          key: wf-tech-main-cluster/pose-compute-nodegroup
+          operator: Equal
+          value: "true"
       containers:
-      - name: generate
-        image: wildflowerschools/wf-pose-engine:latest
-        envFrom:
-          - secretRef:
-              name: honeycomb-honeycomb_client-settings
-        env:
-        - name: POSE_ENGINE_RUN_ENVIRONMENT
-          value: greenbrier
-        - name: POSE_ENGINE_RUN_START
-          value: 2021-05-28T13:00:00
-        - name: POSE_ENGINE_RUN_END
-          value: 2021-05-28T21:00:00
-        volumeMounts:
-          - name: efs-pvc
-            mountPath: "/data"
+        - name: generate
+          image: wildflowerschools/wf-pose-engine:latest
+          envFrom:
+            - secretRef:
+                name: pose-engine-video-storage-auth-4dg7ghbkg6
+            - secretRef:
+                name: pose-engine-honeycomb-auth-74td6gk2ff
+            - secretRef:
+                name: pose-engine-mongodb-secrets-97k89bggt5
+          env:
+            - name: POSE_ENGINE_RUN_ENVIRONMENT
+              value: dahlia
+            - name: POSE_ENGINE_RUN_START
+              value: 2023-09-20T17:30:00-0000
+            - name: POSE_ENGINE_RUN_END
+              value: 2023-09-20T17:31:00-0000
+          volumeMounts:
+            - name: efs-pvc
+              mountPath: "/data"
       restartPolicy: OnFailure
       volumes:
         - name: efs-pvc
           persistentVolumeClaim:
             claimName: efs
-  backoffLimit: 4
+  backoffLimit: 1
 

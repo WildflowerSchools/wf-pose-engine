@@ -1,3 +1,5 @@
+from typing import Optional
+
 import platformdirs
 import pydantic_settings
 
@@ -17,6 +19,8 @@ class Settings(pydantic_settings.BaseSettings):
         appname=APP_NAME, appauthor=APP_AUTHOR
     )
     RAW_VIDEO_CACHE_DIR: str = f"{USER_CACHE_DIR}/raw_videos"
+
+    RAW_VIDEO_SOURCE_DIR: Optional[str] = None
 
     MONGO_POSE_URI: str = (
         "mongodb://pose-engine:iamaninsecurepassword@localhost:27017/poses?authSource=poses"
