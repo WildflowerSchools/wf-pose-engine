@@ -66,6 +66,27 @@ def click_options_environment_start_end():
     )
 
 
+def click_options_batch_sizes():
+    return click_add_options(
+        [
+            click.option(
+                "--detector-batch-size",
+                type=int,
+                required=False,
+                help="Maxiumum numbers of objects the object detector will process per batch",
+                show_envvar=True,
+            ),
+            click.option(
+                "--pose-estimator-batch-size",
+                type=int,
+                required=False,
+                help="Maxiumum numbers of objects the pose estimator will process per batch",
+                show_envvar=True,
+            ),
+        ]
+    )
+
+
 @click_log.simple_verbosity_option(logger, show_envvar=True)
 @click.group(context_settings={"auto_envvar_prefix": "POSE_ENGINE"})
 @click.option(
@@ -147,17 +168,28 @@ def cli(env_file, profile):
 
 @click.command(name="run", help="Generate and store poses from classroom video")
 @click_options_environment_start_end()
-def cli_run(environment, start, end):
+@click_options_batch_sizes()
+def cli_run(environment, start, end, detector_batch_size, pose_estimator_batch_size):
     from . import core
 
-    core.run(environment=environment, start=start, end=end)
+    core.run(
+        environment=environment,
+        start=start,
+        end=end,
+        detector_batch_size=detector_batch_size,
+        pose_estimator_batch_size=pose_estimator_batch_size,
+    )
 
 
 @click.command(name="batch", help="Generate poses for a batch of instances")
-def cli_batch():
+@click_options_batch_sizes()
+def cli_batch(detector_batch_size, pose_estimator_batch_size):
     from . import core
 
-    core.batch()
+    core.batch(
+        detector_batch_size=detector_batch_size,
+        pose_estimator_batch_size=pose_estimator_batch_size,
+    )
 
 
 cli.add_command(cli_run)

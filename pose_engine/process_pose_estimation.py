@@ -108,14 +108,14 @@ class ProcessPoseEstimation:
         use_fp_16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
-        max_objects_per_inference: int = 100,
+        batch_size: int = 100,
     ):
         self.pose_estimator_model: PoseModel = pose_estimator_model
         self.device: str = device
         self.use_fp_16: bool = use_fp_16
         self.run_parallel: bool = run_parallel
         self.run_distributed: bool = run_distributed
-        self.max_objects_per_inference: int = max_objects_per_inference
+        self.batch_size: int = batch_size
 
         self.data_loader: Union[BoundingBoxesDataLoader, VideoFramesDataLoader] = (
             input_data_loader
@@ -267,7 +267,7 @@ class ProcessPoseEstimation:
                 checkpoint=self.pose_estimator_model.checkpoint,
                 deployment_config_path=self.pose_estimator_model.deployment_config,
                 device=pose_estimator_device,
-                max_objects_per_inference=self.max_objects_per_inference,
+                batch_size=self.batch_size,
                 use_fp_16=self.use_fp_16,
                 run_parallel=self.run_parallel,
                 run_distributed=self.run_distributed,

@@ -33,7 +33,7 @@ class PoseEstimator:
         checkpoint: str = None,
         deployment_config_path: str = None,
         device: str = "cuda:1",
-        max_objects_per_inference: int = 75,
+        batch_size: int = 75,
         use_fp_16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
@@ -52,7 +52,7 @@ class PoseEstimator:
         self.deployment_config = None
 
         self.device = device
-        self.max_objects_per_inference = max_objects_per_inference
+        self.batch_size = batch_size
         self.use_fp_16 = use_fp_16
         self.run_parallel = run_parallel
         self.run_distributed = run_distributed
@@ -299,9 +299,9 @@ class PoseEstimator:
             # collate data list into a batch, which is a dict with following keys:
             # batch['inputs']: a list of input images
             # batch['data_samples']: a list of :obj:`PoseDataSample`
-            chunk_size = self.max_objects_per_inference
-            for chunk_ii in range(0, len(data_list), chunk_size):
-                sub_data_list = data_list[chunk_ii : chunk_ii + chunk_size]
+            batch_chunk_size = self.batch_size
+            for chunk_ii in range(0, len(data_list), batch_chunk_size):
+                sub_data_list = data_list[chunk_ii : chunk_ii + batch_chunk_size]
 
                 logger.debug(
                     f"Running pose estimation against {len(sub_data_list)} data samples..."

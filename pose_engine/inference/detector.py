@@ -33,7 +33,7 @@ class Detector:
         nms_iou_threshold=0.3,
         bbox_threshold=0.3,
         use_fp_16=False,
-        max_objects_per_inference=100,
+        batch_size=100,
         compile_model: bool = False,
     ):
         logger.info("Initializing object detector...")
@@ -50,7 +50,7 @@ class Detector:
 
         self.use_fp_16 = use_fp_16
 
-        self.max_objects_per_inference = max_objects_per_inference
+        self.batch_size = batch_size
 
         self.compile_model = compile_model
 
@@ -246,14 +246,15 @@ class Detector:
                 self._first_inference_time.value = current_loop_time
 
             try:
-                logger.debug(
-                    f"Processing detector batch #{batch_idx} - Includes {len(frames)} frames"
-                )
                 all_det_results = []
                 meta_as_list_of_dicts = []
-                chunk_size = self.max_objects_per_inference
-                for chunk_ii in range(0, len(frames), chunk_size):
-                    sub_frames = frames[chunk_ii : chunk_ii + chunk_size]
+                batch_chunk_size = self.batch_size
+                for chunk_ii in range(0, len(frames), batch_chunk_size):
+                    logger.debug(
+                        f"Processing detector batch #{batch_idx}:{chunk_ii} - Includes {len(frames)} frames"
+                    )
+
+                    sub_frames = frames[chunk_ii : chunk_ii + batch_chunk_size]
                     logger.debug(
                         f"Running detections against {len(sub_frames)} frames..."
                     )

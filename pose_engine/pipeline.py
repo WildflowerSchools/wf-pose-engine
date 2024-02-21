@@ -17,8 +17,8 @@ from .process_status_poll import ProcessStatusPoll
 from .process_store_poses import ProcessStorePoses
 from .video import VideoFetch
 
-DETECTOR_MAX_OBJECTS_PER_INFERENCE = 100
-POSE_ESTIMATOR_MAX_OBJECTS_PER_INFERENCE = 350
+DEFAULT_DETECTOR_BATCH_SIZE = 100
+DEFAULT_POSE_ESTIMATOR_BATCH_SIZE = 350
 
 
 class Pipeline:
@@ -32,12 +32,8 @@ class Pipeline:
         use_fp_16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
-        detector_max_objects_per_inference: Optional[
-            int
-        ] = DETECTOR_MAX_OBJECTS_PER_INFERENCE,
-        pose_estimator_max_objects_per_inference: Optional[
-            int
-        ] = POSE_ESTIMATOR_MAX_OBJECTS_PER_INFERENCE,
+        detector_batch_size: Optional[int] = DEFAULT_DETECTOR_BATCH_SIZE,
+        pose_estimator_batch_size: Optional[int] = DEFAULT_POSE_ESTIMATOR_BATCH_SIZE,
     ):
         if (
             detector_model is None
@@ -55,19 +51,15 @@ class Pipeline:
         self.use_fp_16: bool = use_fp_16
         self.run_distributed: bool = run_distributed
 
-        if detector_max_objects_per_inference is None:
-            self.detector_max_objects_per_inference = DETECTOR_MAX_OBJECTS_PER_INFERENCE
+        if detector_batch_size is None:
+            self.detector_batch_size = DEFAULT_DETECTOR_BATCH_SIZE
         else:
-            self.detector_max_objects_per_inference = detector_max_objects_per_inference
+            self.detector_batch_size = detector_batch_size
 
-        if pose_estimator_max_objects_per_inference is None:
-            self.pose_estimator_max_objects_per_inference = (
-                POSE_ESTIMATOR_MAX_OBJECTS_PER_INFERENCE
-            )
+        if pose_estimator_batch_size is None:
+            self.pose_estimator_batch_size = DEFAULT_POSE_ESTIMATOR_BATCH_SIZE
         else:
-            self.pose_estimator_max_objects_per_inference = (
-                pose_estimator_max_objects_per_inference
-            )
+            self.pose_estimator_batch_size = pose_estimator_batch_size
 
         if (
             self.pose_estimator_model.pose_estimator_type
@@ -137,15 +129,11 @@ class Pipeline:
             self.pose_estimator_model.pose_estimator_type
             == pose_2d.PoseEstimatorType.top_down
         ):
-            video_frame_dataloader_batch_size = self.detector_max_objects_per_inference
+            video_frame_dataloader_batch_size = self.detector_batch_size
         else:
-            video_frame_dataloader_batch_size = (
-                self.pose_estimator_max_objects_per_inference
-            )
+            video_frame_dataloader_batch_size = self.pose_estimator_batch_size
 
-        bouding_box_dataloader_batch_size = (
-            self.pose_estimator_max_objects_per_inference
-        )
+        bouding_box_dataloader_batch_size = self.pose_estimator_batch_size
 
         self.video_frame_dataset = loaders.VideoFramesDataset(
             frame_queue_maxsize=1000,
@@ -202,7 +190,7 @@ class Pipeline:
                 output_bbox_dataset=self.bbox_dataset,
                 device=self.detector_device,
                 use_fp_16=self.use_fp_16,
-                max_objects_per_inference=self.detector_max_objects_per_inference,
+                batch_size=self.detector_batch_size,
             )
         else:
             pose_estimator_data_loader = self.video_frames_loader
@@ -215,7 +203,7 @@ class Pipeline:
             use_fp_16=self.use_fp_16,
             run_parallel=self.run_parallel,
             run_distributed=self.run_distributed,
-            max_objects_per_inference=self.pose_estimator_max_objects_per_inference,
+            batch_size=self.pose_estimator_batch_size,
         )
 
         self.store_poses_process = ProcessStorePoses(

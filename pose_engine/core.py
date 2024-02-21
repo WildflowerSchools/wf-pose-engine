@@ -21,19 +21,19 @@ def _run(
     pose_model: Optional[PoseModel],
     run_parallel: bool = False,
     run_distributed: bool = False,
-    detector_max_objects_per_inference: Optional[int] = None,
-    pose_estimator_max_objects_per_inference: Optional[int] = None,
+    detector_batch_size: Optional[int] = None,
+    pose_estimator_batch_size: Optional[int] = None,
 ):
     p = Pipeline(
         detector_model=detector_model,
-        detector_device="cuda:0",
+        detector_device="cuda:0",  # Ignored when using run_distributed
         pose_estimator_model=pose_model,
-        pose_estimator_device="cuda:1",
+        pose_estimator_device="cuda:1",  # Ignored when using run_distributed
         use_fp_16=True,
         run_parallel=run_parallel,
         run_distributed=run_distributed,
-        detector_max_objects_per_inference=detector_max_objects_per_inference,
-        pose_estimator_max_objects_per_inference=pose_estimator_max_objects_per_inference,
+        detector_batch_size=detector_batch_size,
+        pose_estimator_batch_size=pose_estimator_batch_size,
     )
     p.run(
         environment=environment,
@@ -42,15 +42,21 @@ def _run(
     )
 
 
-def run(environment: str, start: datetime, end: datetime):
+def run(
+    environment: str,
+    start: datetime,
+    end: datetime,
+    detector_batch_size: Optional[int] = None,
+    pose_estimator_batch_size: Optional[int] = None,
+):
     run_parallel = False
 
     ###########################
     # Standard top-down model
     ###########################
     # run_distributed = False
-    # detector_max_objects_per_inference = 110
-    # pose_estimator_max_objects_per_inference = 350
+    # detector_batch_size = 110
+    # pose_estimator_batch_size = 350
     # detector_model = DetectorModel.rtmdet_medium()
     # pose_model = PoseModel.rtmpose_large_384()
 
@@ -58,8 +64,8 @@ def run(environment: str, start: datetime, end: datetime):
     # TensorRT top-down model
     ###########################
     # run_distributed = False
-    # detector_max_objects_per_inference = 110
-    # pose_estimator_max_objects_per_inference = 350
+    # detector_batch_size = 110
+    # pose_estimator_batch_size = 350
     # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_batch()
     # detector_model = DetectorModel.rtmdet_medium_tensorrt_dynamic_640x640_fp16_batch()
     # pose_model = PoseModel.rtmpose_large_384_tensorrt_batch()
@@ -69,8 +75,8 @@ def run(environment: str, start: datetime, end: datetime):
     ###########################
     run_distributed = True
     detector_model = None
-    detector_max_objects_per_inference = None
-    pose_estimator_max_objects_per_inference = 118
+    # detector_batch_size = None
+    # pose_estimator_batch_size = 118
     pose_model = PoseModel.rtmo_large()
 
     ###########################
@@ -78,8 +84,8 @@ def run(environment: str, start: datetime, end: datetime):
     ###########################
     # run_distributed = True
     # detector_model = None
-    # detector_max_objects_per_inference = None
-    # pose_estimator_max_objects_per_inference = 146
+    # detector_batch_size = None
+    # pose_estimator_batch_size = 146
     # pose_model = PoseModel.rtmo_medium()
 
     _run(
@@ -90,12 +96,15 @@ def run(environment: str, start: datetime, end: datetime):
         pose_model=pose_model,
         run_parallel=run_parallel,
         run_distributed=run_distributed,
-        detector_max_objects_per_inference=detector_max_objects_per_inference,
-        pose_estimator_max_objects_per_inference=pose_estimator_max_objects_per_inference,
+        detector_batch_size=detector_batch_size,
+        pose_estimator_batch_size=pose_estimator_batch_size,
     )
 
 
-def batch():
+def batch(
+    detector_batch_size: Optional[int] = None,
+    pose_estimator_batch_size: Optional[int] = None,
+):
     detector_model = DetectorModel.rtmdet_medium()
     pose_model = PoseModel.rtmpose_large_384()
 
@@ -293,6 +302,8 @@ def batch():
         pose_estimator_model=pose_model,
         pose_estimator_device="cuda:1",
         use_fp_16=False,
+        detector_batch_size=detector_batch_size,
+        pose_estimator_batch_size=pose_estimator_batch_size,
     )
 
     df_merged_segments["length"] = (

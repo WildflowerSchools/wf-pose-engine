@@ -18,12 +18,12 @@ class ProcessDetection:
         output_bbox_dataset: BoundingBoxesDataset,
         use_fp_16: bool = False,
         device: str = "cpu",
-        max_objects_per_inference: int = 100,
+        batch_size: int = 100,
     ):
         self.detector_model: DetectorModel = detector_model
         self.device = device
         self.use_fp_16 = use_fp_16
-        self.max_objects_per_inference = max_objects_per_inference
+        self.batch_size = batch_size
 
         self.input_video_frames_loader: VideoFramesDataLoader = (
             input_video_frames_loader
@@ -99,7 +99,7 @@ class ProcessDetection:
                 deployment_config_path=self.detector_model.deployment_config,
                 device=self.device,
                 use_fp_16=self.use_fp_16,
-                max_objects_per_inference=self.max_objects_per_inference,
+                batch_size=self.batch_size,
             )
 
             logger.info("Running ProcessDetection service...")
