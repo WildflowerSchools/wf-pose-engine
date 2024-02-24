@@ -16,14 +16,16 @@ class ProcessDetection:
         detector_model: DetectorModel,
         input_video_frames_loader: VideoFramesDataLoader,
         output_bbox_dataset: BoundingBoxesDataset,
-        use_fp_16: bool = False,
+        use_fp16: bool = False,
         device: str = "cpu",
         batch_size: int = 100,
+        compile_model: bool = False,
     ):
         self.detector_model: DetectorModel = detector_model
         self.device = device
-        self.use_fp_16 = use_fp_16
+        self.use_fp16 = use_fp16
         self.batch_size = batch_size
+        self.compile_model = compile_model
 
         self.input_video_frames_loader: VideoFramesDataLoader = (
             input_video_frames_loader
@@ -98,8 +100,9 @@ class ProcessDetection:
                 checkpoint=self.detector_model.checkpoint,
                 deployment_config_path=self.detector_model.deployment_config,
                 device=self.device,
-                use_fp_16=self.use_fp_16,
+                use_fp16=self.use_fp16,
                 batch_size=self.batch_size,
+                compile_model=self.compile_model,
             )
 
             logger.info("Running ProcessDetection service...")

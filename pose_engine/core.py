@@ -21,6 +21,8 @@ def _run(
     pose_model: Optional[PoseModel],
     run_parallel: bool = False,
     run_distributed: bool = False,
+    use_fp16: bool = True,
+    compile_models: bool = True,
     detector_batch_size: Optional[int] = None,
     pose_estimator_batch_size: Optional[int] = None,
 ):
@@ -28,10 +30,11 @@ def _run(
         detector_model=detector_model,
         detector_device="cuda:0",  # Ignored when using run_distributed
         pose_estimator_model=pose_model,
-        pose_estimator_device="cuda:1",  # Ignored when using run_distributed
-        use_fp_16=True,
+        pose_estimator_device="cuda:0",  # Ignored when using run_distributed
+        use_fp16=use_fp16,
         run_parallel=run_parallel,
         run_distributed=run_distributed,
+        compile_models=compile_models,
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
     )
@@ -48,6 +51,8 @@ def run(
     end: datetime,
     detector_batch_size: Optional[int] = None,
     pose_estimator_batch_size: Optional[int] = None,
+    use_fp16: bool = True,
+    compile_models: bool = True,
 ):
     run_parallel = False
 
@@ -98,6 +103,8 @@ def run(
         run_distributed=run_distributed,
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
+        compile_models=compile_models,
+        use_fp16=use_fp16,
     )
 
 
@@ -301,7 +308,7 @@ def batch(
         detector_device="cuda:0",
         pose_estimator_model=pose_model,
         pose_estimator_device="cuda:1",
-        use_fp_16=False,
+        use_fp16=False,
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
     )

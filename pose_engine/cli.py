@@ -66,7 +66,7 @@ def click_options_environment_start_end():
     )
 
 
-def click_options_batch_sizes():
+def click_options_pose_engine_config():
     return click_add_options(
         [
             click.option(
@@ -82,6 +82,24 @@ def click_options_batch_sizes():
                 required=False,
                 help="Maxiumum numbers of objects the pose estimator will process per batch",
                 show_envvar=True,
+            ),
+            click.option(
+                "--use-fp16",
+                type=bool,
+                required=False,
+                help="Enable to use float16. Should yield faster results at some risk of impacting accuracy",
+                show_envvar=True,
+                default=True,
+                show_default=True,
+            ),
+            click.option(
+                "--compile-models",
+                type=bool,
+                required=False,
+                help="Enable to torch.compile models before running inference",
+                show_envvar=True,
+                default=True,
+                show_default=True,
             ),
         ]
     )
@@ -168,8 +186,16 @@ def cli(env_file, profile):
 
 @click.command(name="run", help="Generate and store poses from classroom video")
 @click_options_environment_start_end()
-@click_options_batch_sizes()
-def cli_run(environment, start, end, detector_batch_size, pose_estimator_batch_size):
+@click_options_pose_engine_config()
+def cli_run(
+    environment,
+    start,
+    end,
+    detector_batch_size,
+    pose_estimator_batch_size,
+    use_fp16,
+    compile_models,
+):
     from . import core
 
     core.run(
@@ -178,12 +204,14 @@ def cli_run(environment, start, end, detector_batch_size, pose_estimator_batch_s
         end=end,
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
+        use_fp16=use_fp16,
+        compile_models=compile_models,
     )
 
 
 @click.command(name="batch", help="Generate poses for a batch of instances")
-@click_options_batch_sizes()
-def cli_batch(detector_batch_size, pose_estimator_batch_size):
+@click_options_pose_engine_config()
+def cli_batch(detector_batch_size, pose_estimator_batch_size, use_fp16, compile_models):
     from . import core
 
     core.batch(

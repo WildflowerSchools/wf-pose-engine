@@ -29,9 +29,10 @@ class Pipeline:
         mp_manager: Optional[mp.Manager] = None,
         detector_device: str = "cpu",
         pose_estimator_device: str = "cpu",
-        use_fp_16: bool = False,
+        use_fp16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
+        compile_models: bool = True,
         detector_batch_size: Optional[int] = DEFAULT_DETECTOR_BATCH_SIZE,
         pose_estimator_batch_size: Optional[int] = DEFAULT_POSE_ESTIMATOR_BATCH_SIZE,
     ):
@@ -48,8 +49,9 @@ class Pipeline:
         self.pose_estimator_model: PoseModel = pose_estimator_model
         self.detector_device: str = detector_device
         self.pose_estimator_device: str = pose_estimator_device
-        self.use_fp_16: bool = use_fp_16
+        self.use_fp16: bool = use_fp16
         self.run_distributed: bool = run_distributed
+        self.compile_models: bool = compile_models
 
         if detector_batch_size is None:
             self.detector_batch_size = DEFAULT_DETECTOR_BATCH_SIZE
@@ -169,7 +171,7 @@ class Pipeline:
         self.poses_loader = loaders.PosesDataLoader(
             dataset=self.poses_dataset,
             shuffle=False,
-            num_workers=0,
+            num_workers=1,
             batch_size=200,
             pin_memory=False,
         )
@@ -189,8 +191,9 @@ class Pipeline:
                 input_video_frames_loader=self.video_frames_loader,
                 output_bbox_dataset=self.bbox_dataset,
                 device=self.detector_device,
-                use_fp_16=self.use_fp_16,
+                use_fp16=self.use_fp16,
                 batch_size=self.detector_batch_size,
+                compile_model=self.compile_models,
             )
         else:
             pose_estimator_data_loader = self.video_frames_loader
@@ -200,10 +203,11 @@ class Pipeline:
             input_data_loader=pose_estimator_data_loader,
             output_poses_dataset=self.poses_dataset,
             device=self.pose_estimator_device,
-            use_fp_16=self.use_fp_16,
+            use_fp16=self.use_fp16,
             run_parallel=self.run_parallel,
             run_distributed=self.run_distributed,
             batch_size=self.pose_estimator_batch_size,
+            compile_model=self.compile_models,
         )
 
         self.store_poses_process = ProcessStorePoses(

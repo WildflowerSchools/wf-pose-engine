@@ -1,11 +1,15 @@
+import locale
 import sys
 
+import torch
 import torch.multiprocessing as mp
 
 from .cli import cli
 
 
 if __name__ == "__main__":
+    # torch.backends.cudnn.benchmark = True
+
     mp.freeze_support()
     mp.set_start_method("spawn", force=True)
 

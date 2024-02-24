@@ -105,17 +105,19 @@ class ProcessPoseEstimation:
         input_data_loader: Union[BoundingBoxesDataLoader, VideoFramesDataLoader],
         output_poses_dataset: PosesDataset,
         device: str = "cpu",
-        use_fp_16: bool = False,
+        use_fp16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
         batch_size: int = 100,
+        compile_model: bool = True,
     ):
         self.pose_estimator_model: PoseModel = pose_estimator_model
         self.device: str = device
-        self.use_fp_16: bool = use_fp_16
+        self.use_fp16: bool = use_fp16
         self.run_parallel: bool = run_parallel
         self.run_distributed: bool = run_distributed
         self.batch_size: int = batch_size
+        self.compile_model: bool = compile_model
 
         self.data_loader: Union[BoundingBoxesDataLoader, VideoFramesDataLoader] = (
             input_data_loader
@@ -268,10 +270,10 @@ class ProcessPoseEstimation:
                 deployment_config_path=self.pose_estimator_model.deployment_config,
                 device=pose_estimator_device,
                 batch_size=self.batch_size,
-                use_fp_16=self.use_fp_16,
+                use_fp16=self.use_fp16,
                 run_parallel=self.run_parallel,
                 run_distributed=self.run_distributed,
-                compile_model=True,
+                compile_model=self.compile_model,
             )
 
             for pose_tuple in pose_estimator.iter_dataloader(loader=self.data_loader):

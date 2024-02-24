@@ -7,7 +7,7 @@ import torch
 import torch.multiprocessing as mp
 import torch.utils.data
 
-# import torch_tensorrt
+import torch_tensorrt
 
 from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
@@ -34,7 +34,7 @@ class PoseEstimator:
         deployment_config_path: str = None,
         device: str = "cuda:1",
         batch_size: int = 75,
-        use_fp_16: bool = False,
+        use_fp16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
         compile_model: bool = False,
@@ -53,7 +53,7 @@ class PoseEstimator:
 
         self.device = device
         self.batch_size = batch_size
-        self.use_fp_16 = use_fp_16
+        self.use_fp16 = use_fp16
         self.run_parallel = run_parallel
         self.run_distributed = run_distributed
         self.compile_model = compile_model
@@ -64,6 +64,8 @@ class PoseEstimator:
             # self.device = torch.device(type="cpu")
             self.distributed_rank = torch.distributed.get_rank()
             self.distributed_world_size = torch.distributed.get_world_size()
+
+            self.device = f"cuda:{self.distributed_rank}"
 
         self.lock = mp.Lock()
 
@@ -79,8 +81,9 @@ class PoseEstimator:
             )
             pose_estimator.share_memory()
 
-            if self.use_fp_16:
-                self.pose_estimator = pose_estimator.half()
+            if self.use_fp16:
+                self.pose_estimator = pose_estimator
+                # pass #self.pose_estimator = pose_estimator.half()
             else:
                 self.pose_estimator = pose_estimator
 
@@ -88,25 +91,44 @@ class PoseEstimator:
 
             if self.compile_model:
                 logger.info("Compiling pose estimator model...")
-                self.pose_estimator = torch.compile(
-                    self.pose_estimator, mode="max-autotune"
-                )
-                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
                 # self.pose_estimator = torch.compile(
                 #     self.pose_estimator,
-                #     backend="torch_tensorrt",
-                #     dynamic=False,
-                #     options={
-                #         "truncate_long_and_double": True,
-                #         "precision": torch.half,
-                #         # "debug": True,
-                #         "min_block_size": 10,
-                #         # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
-                #         "optimization_level": 5,
-                #         "use_python_runtime": False
-                #     }
+                #     # mode="default",  #"reduce-overhead"  # "max-autotune"
+                #     options={"triton.cudagraphs": True}
                 # )
+
+                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
+                self.pose_estimator = torch.compile(
+                    self.pose_estimator,
+                    backend="torch_tensorrt",
+                    dynamic=False,
+                    options={
+                        "truncate_long_and_double": True,
+                        "precision": torch.half if self.use_fp16 else torch.float,
+                        # "debug": True,
+                        # "min_block_size": 10,
+                        # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
+                        "optimization_level": 3,
+                        "use_python_runtime": False,
+                        "device": self.device,
+                    },
+                )
+
+                with torch.no_grad():
+                    self.pose_estimator.forward(
+                        inputs=torch.randn(self.batch_size, 3, 640, 640).to(
+                            self.device
+                        ),
+                        data_samples=None,
+                        mode="tensor",
+                    )
+
                 logger.info("Finished compiling pose estimator model")
+
+            if self.use_fp16:
+                self.pose_estimator = pose_estimator.half()
+            else:
+                self.pose_estimator = pose_estimator
 
             if self.run_parallel:
                 self.pose_estimator = MMLabCompatibleDataParallel(
@@ -410,7 +432,7 @@ class PoseEstimator:
 
                 with (
                     torch.cuda.amp.autocast()
-                    if self.use_fp_16 and not self.using_tensort
+                    if self.use_fp16 and not self.using_tensort
                     else nullcontext()
                 ):
                     inference_type = "topdown" if is_topdown else "onestage"

@@ -32,7 +32,7 @@ class Detector:
         device="cpu",
         nms_iou_threshold=0.3,
         bbox_threshold=0.3,
-        use_fp_16=False,
+        use_fp16=False,
         batch_size=100,
         compile_model: bool = False,
     ):
@@ -48,7 +48,7 @@ class Detector:
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
 
-        self.use_fp_16 = use_fp_16
+        self.use_fp16 = use_fp16
 
         self.batch_size = batch_size
 
@@ -64,7 +64,7 @@ class Detector:
             detector.cfg = adapt_mmdet_pipeline(detector.cfg)
             detector.share_memory()
 
-            if self.use_fp_16:
+            if self.use_fp16:
                 self.detector = detector.half().to(device)
             else:
                 self.detector = detector
@@ -270,7 +270,7 @@ class Detector:
                     )  # Annoying we have to move frames/images to the CPU to run detector
 
                     self.lock.acquire()
-                    with torch.cuda.amp.autocast() if self.use_fp_16 else nullcontext():
+                    with torch.cuda.amp.autocast() if self.use_fp16 else nullcontext():
                         det_results = self.inference_detector(
                             # model=self.detector,
                             imgs=list_np_imgs
