@@ -1,9 +1,12 @@
 from contextlib import nullcontext
+
+# import logging
 import time
 from typing import List, Optional, Union
 
 import numpy as np
 import torch
+import torch._dynamo as torchdynamo
 import torch.multiprocessing as mp
 import torch.utils.data
 
@@ -18,7 +21,7 @@ from mmpose.apis import init_model as init_pose_estimator
 from mmpose.apis.inference import dataset_meta_from_config
 from mmpose.evaluation.functional import nearby_joints_nms
 from mmpose.structures import PoseDataSample
-from mmpose.structures.bbox import bbox_xywh2xyxy
+from mmpose.structures.bbox import bbox_xywh2xyxy  # , bbox_overlaps
 from PIL import Image
 
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
@@ -39,7 +42,10 @@ class PoseEstimator:
         run_distributed: bool = False,
         compile_model: bool = False,
     ):
-        logger.info("Initializing pose estimator...")
+        # torch._logging.set_logs(recompiles=True) #dynamo=logging.DEBUG
+        # torch._dynamo.config.suppress_errors = True
+        torchdynamo.config.cache_size_limit = 128
+        # torch.compiler.disable(fn=bbox_overlaps, recursive=True)
 
         if model_config_path is None or checkpoint is None:
             raise ValueError(
@@ -47,6 +53,7 @@ class PoseEstimator:
             )
 
         self.model_config_path = model_config_path
+
         self.checkpoint = checkpoint
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
@@ -67,6 +74,8 @@ class PoseEstimator:
 
             self.device = f"cuda:{self.distributed_rank}"
 
+        logger.info(f"Initializing pose estimator (device: {self.device})...")
+
         self.lock = mp.Lock()
 
         self.pose_estimator = None
@@ -74,61 +83,14 @@ class PoseEstimator:
 
         self.using_tensort = self.deployment_config_path is not None
         if not self.using_tensort:  # Standard PYTorch
-            pose_estimator = init_pose_estimator(
+            self.pose_estimator = init_pose_estimator(
                 config=self.model_config_path,
                 checkpoint=self.checkpoint,
                 device=self.device,
             )
-            pose_estimator.share_memory()
+            self.pose_estimator.share_memory()
 
-            if self.use_fp16:
-                self.pose_estimator = pose_estimator
-                # pass #self.pose_estimator = pose_estimator.half()
-            else:
-                self.pose_estimator = pose_estimator
-
-            self.model_config = pose_estimator.cfg
-
-            if self.compile_model:
-                logger.info("Compiling pose estimator model...")
-                # self.pose_estimator = torch.compile(
-                #     self.pose_estimator,
-                #     # mode="default",  #"reduce-overhead"  # "max-autotune"
-                #     options={"triton.cudagraphs": True}
-                # )
-
-                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
-                self.pose_estimator = torch.compile(
-                    self.pose_estimator,
-                    backend="torch_tensorrt",
-                    dynamic=False,
-                    options={
-                        "truncate_long_and_double": True,
-                        "precision": torch.half if self.use_fp16 else torch.float,
-                        # "debug": True,
-                        # "min_block_size": 10,
-                        # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
-                        "optimization_level": 3,
-                        "use_python_runtime": False,
-                        "device": self.device,
-                    },
-                )
-
-                with torch.no_grad():
-                    self.pose_estimator.forward(
-                        inputs=torch.randn(self.batch_size, 3, 640, 640).to(
-                            self.device
-                        ),
-                        data_samples=None,
-                        mode="tensor",
-                    )
-
-                logger.info("Finished compiling pose estimator model")
-
-            if self.use_fp16:
-                self.pose_estimator = pose_estimator.half()
-            else:
-                self.pose_estimator = pose_estimator
+            self.model_config = self.pose_estimator.cfg
 
             if self.run_parallel:
                 self.pose_estimator = MMLabCompatibleDataParallel(
@@ -163,10 +125,106 @@ class PoseEstimator:
             )
 
         self.pipeline = Compose(self.model_config.test_dataloader.dataset.pipeline)
-
         self.dataset_meta = dataset_meta_from_config(
             self.model_config, dataset_mode="train"
         )
+
+        if self.compile_model:
+            logger.info(f"Compiling pose estimator model (device: {self.device})...")
+
+            # Only compile the model's head, compiling the full model causes way too many graph recompilations
+            if self.run_parallel or self.run_distributed:
+                compileable_module = self.pose_estimator.module.head
+            else:
+                compileable_module = self.pose_estimator.head
+
+            # compiled_model = torch.compile(
+            #     getattr(compileable_module, "forward"),
+            #     dynamic=False,
+            #     mode="max-autotune",# mode="default",  #"reduce-overhead"  # "max-autotune"
+            #     # options={"triton.cudagraphs": True}
+            # )
+
+            # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
+            compiled_model = torch.compile(
+                getattr(compileable_module, "forward"),
+                backend="torch_tensorrt",
+                dynamic=False,
+                options={
+                    "truncate_long_and_double": True,
+                    "precision": torch.half if self.use_fp16 else torch.float,
+                    # "debug": True,
+                    "min_block_size": 5,
+                    "torch_executed_ops": {"torch.ops.aten.sort.default"},
+                    "optimization_level": 3,
+                    "use_python_runtime": False,
+                    "device": self.device,
+                },
+            )
+            setattr(compileable_module, "forward", compiled_model)
+
+            # with (
+            #     torch.cuda.amp.autocast()
+            #     if self.use_fp16 and not self.using_tensort
+            #     else nullcontext()
+            # ):
+            # inference_type = "topdown" if is_topdown else "onestage"
+            # self.inference(
+            #     inference_type="onestage",
+            #     imgs=list(map(lambda x: x.numpy(), list(torch.randn(self.batch_size, 640, 640, 3)))),
+            #     bboxes=None,
+            #     meta={"idx": list(map(lambda x: {"idx": x}, range(self.batch_size)))}
+            # )
+            # with torch.no_grad():
+            #     inputs = {
+            #         "inputs": list(
+            #             torch.randn(self.batch_size, 3, 640, 640).to(
+            #                 self.device
+            #             )
+            #         ),
+            #         "data_samples": list(map(
+            #             {
+            #                 "img_shape": (640, 640),
+            #                 "input_size": (640, 640)
+            #             }, range(self.batch_size)))
+            #     }
+            # self.pose_estimator.test_step(inputs)
+            # self.pose_estimator.forward(
+            #     inputs=torch.randn(self.batch_size, 3, 640, 640).to(
+            #         self.device
+            #     ),
+            #     data_samples=None,
+            #     mode="tensor",
+            # )
+
+            # self.pose_estimator.head.predict(
+            #     feats=torch.randn(self.batch_size, 512, 40, 40).to(
+            #         self.device
+            #     ),
+            #     batch_data_samples=[],
+            #     test_cfg=self.model_config
+            # )
+
+            getattr(compileable_module, "forward")(
+                feats=tuple(
+                    [
+                        torch.randn(
+                            self.batch_size, 512, 40, 40, device=self.device
+                        ).to(torch.float),
+                        torch.randn(
+                            self.batch_size, 512, 20, 20, device=self.device
+                        ).to(torch.float),
+                    ]
+                )
+            )
+
+            logger.info(
+                f"Finished compiling pose estimator mode (device: {self.device})"
+            )
+
+        if self.use_fp16:
+            self.pose_estimator = self.pose_estimator.half()
+
         self._batch_count = mp.Value("i", 0)
         self._frame_count = mp.Value(
             "i", 0
@@ -177,7 +235,7 @@ class PoseEstimator:
         self._first_inference_time = mp.Value("d", -1.0)
         self._time_waiting = mp.Value("d", 0)
 
-        logger.info("Finished initializing pose estimator")
+        logger.info(f"Finished initializing pose estimator (device: {self.device})")
 
     @property
     def frame_count(self) -> int:
@@ -313,7 +371,7 @@ class PoseEstimator:
             records_per_second = round(len(data_list) / total_pre_processing_time, 2)
 
         logger.info(
-            f"Pose estimator data pipeline pre-processing time: {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
+            f"Pose estimator data pipeline pre-processing time (device: {self.device}): {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
         )
 
         results = []
@@ -326,10 +384,23 @@ class PoseEstimator:
                 sub_data_list = data_list[chunk_ii : chunk_ii + batch_chunk_size]
 
                 logger.debug(
-                    f"Running pose estimation against {len(sub_data_list)} data samples..."
+                    f"Running pose estimation against {len(sub_data_list)} data samples (device: {self.device})..."
                 )
 
                 batch = pseudo_collate(sub_data_list)
+
+                # Make sure the batch size is consistent. If any items are missing, duplicate the last item in the batch to fill up the batch.
+                # We do this because torch.compile freaks out if it seems a different batch size. It triggers a graph recompilation that kills
+                # the application silently. No idea why that happens.
+                batch_fill = self.batch_size - len(sub_data_list)
+                if batch_fill > 0:
+                    repeated_input = list(
+                        batch["inputs"][-1].unsqueeze(0).repeat(batch_fill, 1, 1, 1)
+                    )
+                    repeated_data_samples = [batch["data_samples"][-1]] * batch_fill
+                    batch["inputs"].extend(repeated_input)
+                    batch["data_samples"].extend(repeated_data_samples)
+
                 with torch.no_grad():
                     # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
                     if self.using_tensort:
@@ -364,9 +435,9 @@ class PoseEstimator:
                         inference_results = self.pose_estimator.test_step(batch)
 
                     logger.info(
-                        f"Pose estimator inference performance: {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
+                        f"Pose estimator inference performance (device: {self.device}): {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
                     )
-                    results.extend(inference_results)
+                    results.extend(inference_results[0 : self.batch_size - batch_fill])
 
         for res_idx, _result in enumerate(results):
             _result.set_field(name="custom_metadata", value=meta_mapping[res_idx])
@@ -413,7 +484,7 @@ class PoseEstimator:
 
             try:
                 logger.info(
-                    f"Processing pose estimation batch #{global_batch_idx} - Includes {len(frames)} frames"
+                    f"Processing pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames"
                 )
 
                 self._frame_count.value += len(frames)
@@ -482,7 +553,7 @@ class PoseEstimator:
                             self._inference_count.value += len(pose_result_bboxes)
 
                         logger.info(
-                            f"Pose estimator pose-processing nearby_joints_nms: {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
+                            f"Pose estimator pose-processing nearby_joints_nms (device: {self.device}): {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
                         )
 
                 # data_samples = merge_data_samples(pose_results)
@@ -548,17 +619,17 @@ class PoseEstimator:
                             )
 
                 logger.info(
-                    f"Pose estimation batch #{global_batch_idx} prepare results for yield time: {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
+                    f"Pose estimation batch #{global_batch_idx} prepare results for yield time (device: {self.device}): {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
                 )
 
                 start_yield_results_time = time.time()
                 yield poses_to_yield
                 logger.info(
-                    f"Pose estimation batch #{global_batch_idx} yield time: {round(time.time() - start_yield_results_time, 2)} seconds"
+                    f"Pose estimation batch #{global_batch_idx} yield time (device: {self.device}): {round(time.time() - start_yield_results_time, 2)} seconds"
                 )
 
                 logger.info(
-                    f"Completed pose estimation batch #{global_batch_idx} - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds"
+                    f"Completed pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds"
                 )
             finally:
                 del bboxes

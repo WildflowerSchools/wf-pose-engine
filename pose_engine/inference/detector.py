@@ -58,18 +58,13 @@ class Detector:
 
         self.using_tensort = self.deployment_config_path is not None
         if not self.using_tensort:  # Standard PYTorch
-            detector = init_detector(
+            self.detector = init_detector(
                 config=self.model_config_path, checkpoint=self.checkpoint, device=device
             )
-            detector.cfg = adapt_mmdet_pipeline(detector.cfg)
-            detector.share_memory()
+            self.detector.cfg = adapt_mmdet_pipeline(self.detector.cfg)
+            self.detector.share_memory()
 
-            if self.use_fp16:
-                self.detector = detector.half().to(device)
-            else:
-                self.detector = detector
-
-            self.model_config = detector.cfg
+            self.model_config = self.detector.cfg
 
             if self.compile_model:
                 logger.info("Compiling detector model...")
@@ -101,6 +96,12 @@ class Detector:
                 device=device,
             )
             self.detector = task_processor.build_backend_model([self.checkpoint])
+
+
+        if self.use_fp16:
+            self.detector = self.detector.half().to(device)
+        else:
+            self.detector = self.detector
 
         cfg = self.model_config.copy()
         self.pipeline = get_test_pipeline_cfg(cfg)

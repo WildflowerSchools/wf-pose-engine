@@ -1,7 +1,6 @@
 import locale
 import sys
 
-import torch
 import torch.multiprocessing as mp
 
 from .cli import cli
