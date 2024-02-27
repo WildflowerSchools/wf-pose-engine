@@ -22,7 +22,7 @@ def _run(
     run_parallel: bool = False,
     run_distributed: bool = False,
     use_fp16: bool = True,
-    compile_models: bool = True,
+    compile_engine: Optional[str] = None,
     detector_batch_size: Optional[int] = None,
     pose_estimator_batch_size: Optional[int] = None,
 ):
@@ -34,7 +34,7 @@ def _run(
         use_fp16=use_fp16,
         run_parallel=run_parallel,
         run_distributed=run_distributed,
-        compile_models=compile_models,
+        compile_engine=compile_engine,
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
     )
@@ -52,7 +52,7 @@ def run(
     detector_batch_size: Optional[int] = None,
     pose_estimator_batch_size: Optional[int] = None,
     use_fp16: bool = True,
-    compile_models: bool = True,
+    compile_engine: Optional[str] = None,
 ):
     run_parallel = False
 
@@ -103,7 +103,7 @@ def run(
         run_distributed=run_distributed,
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
-        compile_models=compile_models,
+        compile_engine=compile_engine,
         use_fp16=use_fp16,
     )
 

@@ -1,6 +1,6 @@
 from contextlib import nullcontext
 
-# import logging
+import logging
 import time
 from typing import List, Optional, Union
 
@@ -40,11 +40,11 @@ class PoseEstimator:
         use_fp16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
-        compile_model: bool = False,
+        compile_engine: Optional[str] = None,
     ):
-        # torch._logging.set_logs(recompiles=True) #dynamo=logging.DEBUG
+        # torch._logging.set_logs(recompiles=True, dynamo=logging.DEBUG) #dynamo=logging.DEBUG
         # torch._dynamo.config.suppress_errors = True
-        torchdynamo.config.cache_size_limit = 128
+        torchdynamo.config.cache_size_limit = 256
         # torch.compiler.disable(fn=bbox_overlaps, recursive=True)
 
         if model_config_path is None or checkpoint is None:
@@ -63,7 +63,7 @@ class PoseEstimator:
         self.use_fp16 = use_fp16
         self.run_parallel = run_parallel
         self.run_distributed = run_distributed
-        self.compile_model = compile_model
+        self.compile_engine = compile_engine
 
         self.distributed_rank: int = -1
         self.distributed_world_size: int = -1
@@ -129,8 +129,13 @@ class PoseEstimator:
             self.model_config, dataset_mode="train"
         )
 
-        if self.compile_model:
-            logger.info(f"Compiling pose estimator model (device: {self.device})...")
+        if self.use_fp16:
+            self.pose_estimator = self.pose_estimator.half()
+
+        if self.compile_engine is not None:
+            logger.info(
+                f"Compiling pose estimator model (device: {self.device}) with '{self.compile_engine}' engine..."
+            )
 
             # Only compile the model's head, compiling the full model causes way too many graph recompilations
             if self.run_parallel or self.run_distributed:
@@ -138,92 +143,104 @@ class PoseEstimator:
             else:
                 compileable_module = self.pose_estimator.head
 
-            # compiled_model = torch.compile(
-            #     getattr(compileable_module, "forward"),
-            #     dynamic=False,
-            #     mode="max-autotune",# mode="default",  #"reduce-overhead"  # "max-autotune"
-            #     # options={"triton.cudagraphs": True}
-            # )
-
-            # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
-            compiled_model = torch.compile(
-                getattr(compileable_module, "forward"),
-                backend="torch_tensorrt",
-                dynamic=False,
-                options={
-                    "truncate_long_and_double": True,
-                    "precision": torch.half if self.use_fp16 else torch.float,
-                    # "debug": True,
-                    "min_block_size": 5,
-                    "torch_executed_ops": {"torch.ops.aten.sort.default"},
-                    "optimization_level": 3,
-                    "use_python_runtime": False,
-                    "device": self.device,
-                },
-            )
-            setattr(compileable_module, "forward", compiled_model)
-
-            # with (
-            #     torch.cuda.amp.autocast()
-            #     if self.use_fp16 and not self.using_tensort
-            #     else nullcontext()
-            # ):
-            # inference_type = "topdown" if is_topdown else "onestage"
-            # self.inference(
-            #     inference_type="onestage",
-            #     imgs=list(map(lambda x: x.numpy(), list(torch.randn(self.batch_size, 640, 640, 3)))),
-            #     bboxes=None,
-            #     meta={"idx": list(map(lambda x: {"idx": x}, range(self.batch_size)))}
-            # )
-            # with torch.no_grad():
-            #     inputs = {
-            #         "inputs": list(
-            #             torch.randn(self.batch_size, 3, 640, 640).to(
-            #                 self.device
-            #             )
-            #         ),
-            #         "data_samples": list(map(
-            #             {
-            #                 "img_shape": (640, 640),
-            #                 "input_size": (640, 640)
-            #             }, range(self.batch_size)))
-            #     }
-            # self.pose_estimator.test_step(inputs)
-            # self.pose_estimator.forward(
-            #     inputs=torch.randn(self.batch_size, 3, 640, 640).to(
-            #         self.device
-            #     ),
-            #     data_samples=None,
-            #     mode="tensor",
-            # )
-
-            # self.pose_estimator.head.predict(
-            #     feats=torch.randn(self.batch_size, 512, 40, 40).to(
-            #         self.device
-            #     ),
-            #     batch_data_samples=[],
-            #     test_cfg=self.model_config
-            # )
-
-            getattr(compileable_module, "forward")(
-                feats=tuple(
-                    [
-                        torch.randn(
-                            self.batch_size, 512, 40, 40, device=self.device
-                        ).to(torch.float),
-                        torch.randn(
-                            self.batch_size, 512, 20, 20, device=self.device
-                        ).to(torch.float),
-                    ]
+            if compile_engine == "inductor":
+                compiled_model = torch.compile(
+                    getattr(compileable_module, "forward"),
+                    dynamic=False,
+                    mode="max-autotune",  # "max-autotune",# mode="default",  #"reduce-overhead"  # "max-autotune"
+                    # options={"triton.cudagraphs": True}
                 )
-            )
+            elif compile_engine == "tensorrt":
+                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
+                compiled_model = torch.compile(
+                    getattr(compileable_module, "forward"),
+                    backend="torch_tensorrt",
+                    dynamic=False,
+                    options={
+                        "truncate_long_and_double": True,
+                        "precision": torch.half if self.use_fp16 else torch.float,
+                        # "debug": True,
+                        "min_block_size": 10,
+                        "torch_executed_ops": {"torch.ops.aten.sort.default"},
+                        "optimization_level": 3,
+                        "use_python_runtime": False,
+                        "device": self.device,
+                    },
+                )
+            else:
+                compileable_module = None
 
-            logger.info(
-                f"Finished compiling pose estimator mode (device: {self.device})"
-            )
+            if compileable_module is not None:
+                setattr(compileable_module, "forward", compiled_model)
 
-        if self.use_fp16:
-            self.pose_estimator = self.pose_estimator.half()
+                with (
+                    torch.cuda.amp.autocast()
+                    if self.use_fp16 and not self.using_tensort
+                    else nullcontext()
+                ):
+                    # inference_type = "topdown" if is_topdown else "onestage"
+                    self.inference(
+                        inference_type="onestage",
+                        imgs=list(
+                            map(
+                                lambda x: x.numpy(),
+                                list(torch.randn(self.batch_size, 640, 640, 3)),
+                            )
+                        ),
+                        bboxes=None,
+                        meta={
+                            "idx": list(
+                                map(lambda x: {"idx": x}, range(self.batch_size))
+                            )
+                        },
+                    )
+                # with torch.no_grad():
+                #     inputs = {
+                #         "inputs": list(
+                #             torch.randn(self.batch_size, 3, 640, 640).to(
+                #                 self.device
+                #             )
+                #         ),
+                #         "data_samples": list(map(
+                #             {
+                #                 "img_shape": (640, 640),
+                #                 "input_size": (640, 640)
+                #             }, range(self.batch_size)))
+                #     }
+                # self.pose_estimator.test_step(inputs)
+                # self.pose_estimator.forward(
+                #     inputs=torch.randn(self.batch_size, 3, 640, 640).to(
+                #         self.device
+                #     ),
+                #     data_samples=None,
+                #     mode="tensor",
+                # )
+
+                # self.pose_estimator.head.predict(
+                #     feats=torch.randn(self.batch_size, 512, 40, 40).to(
+                #         self.device
+                #     ),
+                #     batch_data_samples=[],
+                #     test_cfg=self.model_config
+                # )
+
+                # with torch.no_grad:
+                #     getattr(compileable_module, "forward")(
+                #         feats=tuple(
+                #             [
+                #                 torch.randn(
+                #                     self.batch_size, 512, 40, 40, device=self.device
+                #                 ).to(torch.half if self.use_fp16 else torch.float),
+                #                 torch.randn(
+                #                     self.batch_size, 512, 20, 20, device=self.device
+                #                 ).to(torch.half if self.use_fp16 else torch.float),
+                #             ]
+                #         )
+                #     )
+
+                logger.info(
+                    f"Finished compiling pose estimator mode (device: {self.device})"
+                )
 
         self._batch_count = mp.Value("i", 0)
         self._frame_count = mp.Value(

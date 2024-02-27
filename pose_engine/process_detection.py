@@ -19,13 +19,13 @@ class ProcessDetection:
         use_fp16: bool = False,
         device: str = "cpu",
         batch_size: int = 100,
-        compile_model: bool = False,
+        compile_engine: Optional[str] = None,
     ):
         self.detector_model: DetectorModel = detector_model
         self.device = device
         self.use_fp16 = use_fp16
         self.batch_size = batch_size
-        self.compile_model = compile_model
+        self.compile_engine = compile_engine
 
         self.input_video_frames_loader: VideoFramesDataLoader = (
             input_video_frames_loader
@@ -102,7 +102,7 @@ class ProcessDetection:
                 device=self.device,
                 use_fp16=self.use_fp16,
                 batch_size=self.batch_size,
-                compile_model=self.compile_model,
+                compile_engine=self.compile_engine,
             )
 
             logger.info("Running ProcessDetection service...")

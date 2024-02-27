@@ -32,7 +32,7 @@ class Pipeline:
         use_fp16: bool = False,
         run_parallel: bool = False,
         run_distributed: bool = False,
-        compile_models: bool = True,
+        compile_engine: Optional[str] = None,
         detector_batch_size: Optional[int] = DEFAULT_DETECTOR_BATCH_SIZE,
         pose_estimator_batch_size: Optional[int] = DEFAULT_POSE_ESTIMATOR_BATCH_SIZE,
     ):
@@ -51,7 +51,7 @@ class Pipeline:
         self.pose_estimator_device: str = pose_estimator_device
         self.use_fp16: bool = use_fp16
         self.run_distributed: bool = run_distributed
-        self.compile_models: bool = compile_models
+        self.compile_engine: str = compile_engine
 
         if detector_batch_size is None:
             self.detector_batch_size = DEFAULT_DETECTOR_BATCH_SIZE
@@ -193,7 +193,7 @@ class Pipeline:
                 device=self.detector_device,
                 use_fp16=self.use_fp16,
                 batch_size=self.detector_batch_size,
-                compile_model=self.compile_models,
+                compile_engine=self.compile_engine,
             )
         else:
             pose_estimator_data_loader = self.video_frames_loader
@@ -207,7 +207,7 @@ class Pipeline:
             run_parallel=self.run_parallel,
             run_distributed=self.run_distributed,
             batch_size=self.pose_estimator_batch_size,
-            compile_model=self.compile_models,
+            compile_engine=self.compile_engine,
         )
 
         self.store_poses_process = ProcessStorePoses(

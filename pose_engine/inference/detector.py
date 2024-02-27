@@ -34,7 +34,7 @@ class Detector:
         bbox_threshold=0.3,
         use_fp16=False,
         batch_size=100,
-        compile_model: bool = False,
+        compile_engine: Optional[str] = None,
     ):
         logger.info("Initializing object detector...")
 
@@ -52,7 +52,7 @@ class Detector:
 
         self.batch_size = batch_size
 
-        self.compile_model = compile_model
+        self.compile_engine = compile_engine
 
         self.lock = mp.Lock()
 
@@ -66,26 +66,6 @@ class Detector:
 
             self.model_config = self.detector.cfg
 
-            if self.compile_model:
-                logger.info("Compiling detector model...")
-                self.detector = torch.compile(self.detector, mode="max-autotune")
-                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
-                # self.detector = torch.compile(
-                #     self.detector,
-                #     backend="torch_tensorrt",
-                #     dynamic=False,
-                #     options={
-                #         "truncate_long_and_double": True,
-                #         "precision": torch.half,
-                #         # "debug": True,
-                #         # "min_block_size": 2,
-                #         # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
-                #         "optimization_level": 5,
-                #         "use_python_runtime": False
-                #     }
-                # )
-                logger.info("Finished compiling detector model")
-
         else:  # TensorRT
             self.model_config, self.deployment_config = load_config(
                 self.model_config_path, self.deployment_config_path
@@ -97,11 +77,36 @@ class Detector:
             )
             self.detector = task_processor.build_backend_model([self.checkpoint])
 
-
         if self.use_fp16:
             self.detector = self.detector.half().to(device)
         else:
             self.detector = self.detector
+
+        if self.compile_engine is not None:
+            logger.info("Compiling detector model...")
+
+            if self.compile_engine == "inductor":
+                self.detector = torch.compile(
+                    self.detector, dynamic=False, mode="max-autotune"
+                )
+            elif self.compile_engine == "tensorrt":
+                # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
+                self.detector = torch.compile(
+                    self.detector,
+                    backend="torch_tensorrt",
+                    dynamic=False,
+                    options={
+                        "truncate_long_and_double": True,
+                        "precision": torch.half if self.use_fp16 else torch.float,
+                        # "debug": True,
+                        "min_block_size": 10,
+                        # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
+                        "optimization_level": 3,
+                        "use_python_runtime": False,
+                        "device": self.device,
+                    },
+                )
+            logger.info("Finished compiling detector model")
 
         cfg = self.model_config.copy()
         self.pipeline = get_test_pipeline_cfg(cfg)

@@ -93,12 +93,12 @@ def click_options_pose_engine_config():
                 show_default=True,
             ),
             click.option(
-                "--compile-models",
-                type=bool,
+                "--compile",
+                type=click.Choice(["inductor", "tensorrt"], case_sensitive=False),
                 required=False,
-                help="Enable to torch.compile models before running inference",
+                help="Set to run torch.compile against models before running inference",
                 show_envvar=True,
-                default=True,
+                default=None,
                 show_default=True,
             ),
         ]
@@ -194,7 +194,7 @@ def cli_run(
     detector_batch_size,
     pose_estimator_batch_size,
     use_fp16,
-    compile_models,
+    compile,
 ):
     from . import core
 
@@ -205,13 +205,13 @@ def cli_run(
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
         use_fp16=use_fp16,
-        compile_models=compile_models,
+        compile_engine=compile,
     )
 
 
 @click.command(name="batch", help="Generate poses for a batch of instances")
 @click_options_pose_engine_config()
-def cli_batch(detector_batch_size, pose_estimator_batch_size, use_fp16, compile_models):
+def cli_batch(detector_batch_size, pose_estimator_batch_size, use_fp16, compile):
     from . import core
 
     core.batch(
