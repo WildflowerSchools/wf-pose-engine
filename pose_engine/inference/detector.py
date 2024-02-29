@@ -18,7 +18,7 @@ import torch.multiprocessing as mp
 import torch.utils.data
 import torchvision.ops
 
-# import torch_tensorrt
+import torch_tensorrt
 
 from pose_engine.log import logger
 
@@ -47,6 +47,7 @@ class Detector:
         self.checkpoint = checkpoint
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
+        self.device = device
 
         self.use_fp16 = use_fp16
 
@@ -77,6 +78,14 @@ class Detector:
             )
             self.detector = task_processor.build_backend_model([self.checkpoint])
 
+        cfg = self.model_config.copy()
+        self.pipeline = get_test_pipeline_cfg(cfg)
+        # if isinstance(imgs[0], np.ndarray):
+        # Calling this method across libraries will result
+        # in module unregistered error if not prefixed with mmdet.
+        self.pipeline[0].type = "mmdet.LoadImageFromNDArray"
+        self.pipeline = Compose(self.pipeline)
+
         if self.use_fp16:
             self.detector = self.detector.half().to(device)
         else:
@@ -87,7 +96,7 @@ class Detector:
 
             if self.compile_engine == "inductor":
                 self.detector = torch.compile(
-                    self.detector, dynamic=False, mode="max-autotune"
+                    self.detector, dynamic=False, mode="default"
                 )
             elif self.compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
@@ -100,21 +109,17 @@ class Detector:
                         "precision": torch.half if self.use_fp16 else torch.float,
                         # "debug": True,
                         "min_block_size": 10,
-                        # "torch_executed_ops": {"torch.ops.aten.sub.Tensor"},
                         "optimization_level": 3,
                         "use_python_runtime": False,
                         "device": self.device,
                     },
                 )
-            logger.info("Finished compiling detector model")
 
-        cfg = self.model_config.copy()
-        self.pipeline = get_test_pipeline_cfg(cfg)
-        # if isinstance(imgs[0], np.ndarray):
-        # Calling this method across libraries will result
-        # in module unregistered error if not prefixed with mmdet.
-        self.pipeline[0].type = "mmdet.LoadImageFromNDArray"
-        self.pipeline = Compose(self.pipeline)
+            with torch.cuda.amp.autocast() if self.use_fp16 else nullcontext():
+                self.inference_detector(
+                    imgs=list(np.random.rand(self.batch_size, 972, 1296, 3))
+                )
+            logger.info("Finished compiling detector model")
 
         self.nms_iou_threshold = nms_iou_threshold
         self.bbox_threshold = bbox_threshold

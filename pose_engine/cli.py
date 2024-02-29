@@ -70,6 +70,15 @@ def click_options_pose_engine_config():
     return click_add_options(
         [
             click.option(
+                "--inference-mode",
+                type=click.Choice(["onestage", "topdown"], case_sensitive=False),
+                required=False,
+                help="Select inference mode/workflow",
+                show_envvar=True,
+                default="onestage",
+                show_default=True,
+            ),
+            click.option(
                 "--detector-batch-size",
                 type=int,
                 required=False,
@@ -191,6 +200,7 @@ def cli_run(
     environment,
     start,
     end,
+    inference_mode,
     detector_batch_size,
     pose_estimator_batch_size,
     use_fp16,
@@ -202,6 +212,7 @@ def cli_run(
         environment=environment,
         start=start,
         end=end,
+        inference_mode=inference_mode,
         detector_batch_size=detector_batch_size,
         pose_estimator_batch_size=pose_estimator_batch_size,
         use_fp16=use_fp16,
@@ -211,7 +222,9 @@ def cli_run(
 
 @click.command(name="batch", help="Generate poses for a batch of instances")
 @click_options_pose_engine_config()
-def cli_batch(detector_batch_size, pose_estimator_batch_size, use_fp16, compile):
+def cli_batch(
+    inference_mode, detector_batch_size, pose_estimator_batch_size, use_fp16, compile
+):
     from . import core
 
     core.batch(

@@ -1,7 +1,7 @@
 from contextlib import nullcontext
 
-import logging
 import time
+from random import randrange
 from typing import List, Optional, Union
 
 import numpy as np
@@ -19,9 +19,14 @@ from mmengine.model.wrappers import MMDistributedDataParallel
 from mmengine.registry import init_default_scope
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.apis.inference import dataset_meta_from_config
-from mmpose.evaluation.functional import nearby_joints_nms
 from mmpose.structures import PoseDataSample
-from mmpose.structures.bbox import bbox_xywh2xyxy  # , bbox_overlaps
+from mmpose.structures.bbox import bbox_xywh2xyxy
+
+import mmpose.models.heads.hybrid_heads.rtmo_head
+import mmpose.evaluation.functional
+import mmpose.evaluation.functional.nms
+from mmpose.evaluation.functional import nearby_joints_nms
+
 from PIL import Image
 
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
@@ -44,7 +49,7 @@ class PoseEstimator:
     ):
         # torch._logging.set_logs(recompiles=True, dynamo=logging.DEBUG) #dynamo=logging.DEBUG
         # torch._dynamo.config.suppress_errors = True
-        torchdynamo.config.cache_size_limit = 256
+        torchdynamo.config.cache_size_limit = 512
         # torch.compiler.disable(fn=bbox_overlaps, recursive=True)
 
         if model_config_path is None or checkpoint is None:
@@ -64,11 +69,11 @@ class PoseEstimator:
         self.run_parallel = run_parallel
         self.run_distributed = run_distributed
         self.compile_engine = compile_engine
+        self.was_model_compiled = False
 
         self.distributed_rank: int = -1
         self.distributed_world_size: int = -1
         if self.run_distributed:
-            # self.device = torch.device(type="cpu")
             self.distributed_rank = torch.distributed.get_rank()
             self.distributed_world_size = torch.distributed.get_world_size()
 
@@ -144,11 +149,26 @@ class PoseEstimator:
                 compileable_module = self.pose_estimator.head
 
             if compile_engine == "inductor":
+                if self.compile_engine is not None and compile_engine == "inductor":
+                    from pose_engine.util import nms_torch
+
+                    mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = torch.compile(
+                        nms_torch,
+                        # mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
+                        dynamic=True,
+                        # DO NOT ENABLE max-autotune mode, it enables triton.cudagraphs which leads to an Exception. Must set max_autotune in inductor options.
+                        #   ERROR: These live storage data ptrs are in the cudagraph pool but not accounted for as an output of cudagraph trees:
+                        # mode="max-autotune",
+                        options={
+                            "max_autotune": True,
+                            "triton.cudagraphs": False,  # This must be set to False
+                        },
+                    )
+
                 compiled_model = torch.compile(
                     getattr(compileable_module, "forward"),
                     dynamic=False,
-                    mode="max-autotune",  # "max-autotune",# mode="default",  #"reduce-overhead"  # "max-autotune"
-                    # options={"triton.cudagraphs": True}
+                    mode="default",
                 )
             elif compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
@@ -172,71 +192,43 @@ class PoseEstimator:
 
             if compileable_module is not None:
                 setattr(compileable_module, "forward", compiled_model)
+                self.was_model_compiled = True
 
                 with (
                     torch.cuda.amp.autocast()
                     if self.use_fp16 and not self.using_tensort
                     else nullcontext()
                 ):
-                    # inference_type = "topdown" if is_topdown else "onestage"
-                    self.inference(
-                        inference_type="onestage",
-                        imgs=list(
-                            map(
-                                lambda x: x.numpy(),
-                                list(torch.randn(self.batch_size, 640, 640, 3)),
-                            )
-                        ),
-                        bboxes=None,
-                        meta={
+                    bboxes = None
+                    inference_mode = None
+                    if self.model_config["data_mode"] == "topdown":
+                        inference_mode = "topdown"
+                        imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+
+                        bboxes = []
+                        for _ in range(self.batch_size):
+                            img_boxes = np.random.rand(
+                                randrange(0, 18), 5
+                            )  # For test inference, generate upto 18 bboxes (i.e. people) for each images
+                            img_boxes[:, :4] = np.asarray([0.0, 0.0, 972.0, 1296.0])
+                            bboxes.append(img_boxes)
+
+                        meta = list(map(lambda x: {"idx": x}, range(self.batch_size)))
+                    else:
+                        inference_mode = "onestage"
+                        imgs = list(np.random.rand(self.batch_size, 640, 640, 3))
+                        meta = {
                             "idx": list(
                                 map(lambda x: {"idx": x}, range(self.batch_size))
                             )
-                        },
+                        }
+
+                    self.inference(
+                        inference_mode=inference_mode,
+                        imgs=imgs,
+                        bboxes=bboxes,
+                        meta=meta,
                     )
-                # with torch.no_grad():
-                #     inputs = {
-                #         "inputs": list(
-                #             torch.randn(self.batch_size, 3, 640, 640).to(
-                #                 self.device
-                #             )
-                #         ),
-                #         "data_samples": list(map(
-                #             {
-                #                 "img_shape": (640, 640),
-                #                 "input_size": (640, 640)
-                #             }, range(self.batch_size)))
-                #     }
-                # self.pose_estimator.test_step(inputs)
-                # self.pose_estimator.forward(
-                #     inputs=torch.randn(self.batch_size, 3, 640, 640).to(
-                #         self.device
-                #     ),
-                #     data_samples=None,
-                #     mode="tensor",
-                # )
-
-                # self.pose_estimator.head.predict(
-                #     feats=torch.randn(self.batch_size, 512, 40, 40).to(
-                #         self.device
-                #     ),
-                #     batch_data_samples=[],
-                #     test_cfg=self.model_config
-                # )
-
-                # with torch.no_grad:
-                #     getattr(compileable_module, "forward")(
-                #         feats=tuple(
-                #             [
-                #                 torch.randn(
-                #                     self.batch_size, 512, 40, 40, device=self.device
-                #                 ).to(torch.half if self.use_fp16 else torch.float),
-                #                 torch.randn(
-                #                     self.batch_size, 512, 20, 20, device=self.device
-                #                 ).to(torch.half if self.use_fp16 else torch.float),
-                #             ]
-                #         )
-                #     )
 
                 logger.info(
                     f"Finished compiling pose estimator mode (device: {self.device})"
@@ -303,7 +295,7 @@ class PoseEstimator:
     def inference(
         self,
         imgs: Union[list[np.ndarray], list[str]],
-        inference_type: str = "topdown",
+        inference_mode: str = "topdown",
         bboxes: Optional[Union[List[List], List[np.ndarray]]] = None,
         meta: List[dict] = None,
         bbox_format: str = "xyxy",
@@ -334,7 +326,7 @@ class PoseEstimator:
         meta_mapping = []
         total_pre_processing_time = 0
         for img_idx, img in enumerate(imgs):
-            if inference_type == "topdown":
+            if inference_mode == "topdown":
                 img_bboxes = bboxes[img_idx]
                 if img_bboxes is None:
                     # get bbox from the image size
@@ -449,6 +441,9 @@ class PoseEstimator:
                         # logger.info(f"Pose estimator pre-processing, move image tensors to GPU timing: {round(time.time() - s, 2)}")
 
                         s = time.time()
+                        if self.was_model_compiled:
+                            torch.compiler.cudagraph_mark_step_begin()
+
                         inference_results = self.pose_estimator.test_step(batch)
 
                     logger.info(
@@ -523,9 +518,9 @@ class PoseEstimator:
                     if self.use_fp16 and not self.using_tensort
                     else nullcontext()
                 ):
-                    inference_type = "topdown" if is_topdown else "onestage"
+                    inference_mode = "topdown" if is_topdown else "onestage"
                     pose_results = self.inference(
-                        inference_type=inference_type,
+                        inference_mode=inference_mode,
                         imgs=imgs,
                         bboxes=bboxes,
                         meta=meta,

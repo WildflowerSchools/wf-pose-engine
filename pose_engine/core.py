@@ -28,7 +28,7 @@ def _run(
 ):
     p = Pipeline(
         detector_model=detector_model,
-        detector_device="cuda:0",  # Ignored when using run_distributed
+        detector_device="cuda:1",  # Ignored when using run_distributed
         pose_estimator_model=pose_model,
         pose_estimator_device="cuda:0",  # Ignored when using run_distributed
         use_fp16=use_fp16,
@@ -49,6 +49,7 @@ def run(
     environment: str,
     start: datetime,
     end: datetime,
+    inference_mode: str = "onestage",
     detector_batch_size: Optional[int] = None,
     pose_estimator_batch_size: Optional[int] = None,
     use_fp16: bool = True,
@@ -56,14 +57,26 @@ def run(
 ):
     run_parallel = False
 
+    if inference_mode == "topdown":
+        run_distributed = False
+        detector_model = DetectorModel.rtmdet_medium()
+        pose_model = PoseModel.rtmpose_large_384()
+    elif inference_mode == "onestage":
+        run_distributed = True
+        detector_model = None
+        pose_model = PoseModel.rtmo_large()
+    else:
+        raise ValueError(
+            f"Expected inference mode to be 'onestage' or 'topdown', not '{inference_mode}'"
+        )
+
+    logger.info(f"Starting pose engine in {inference_mode} mode...")
+
     ###########################
     # Standard top-down model
     ###########################
-    # run_distributed = False
     # detector_batch_size = 110
     # pose_estimator_batch_size = 350
-    # detector_model = DetectorModel.rtmdet_medium()
-    # pose_model = PoseModel.rtmpose_large_384()
 
     ###########################
     # TensorRT top-down model
@@ -78,11 +91,11 @@ def run(
     ###########################
     # One-stage model (RTMPose Large)
     ###########################
-    run_distributed = True
-    detector_model = None
+    # run_distributed = True
+    # detector_model = None
     # detector_batch_size = None
     # pose_estimator_batch_size = 118
-    pose_model = PoseModel.rtmo_large()
+    # pose_model = PoseModel.rtmo_large()
 
     ###########################
     # One-stage model (RTMPose Medium)
