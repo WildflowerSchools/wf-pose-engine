@@ -44,7 +44,7 @@ def nms_torch(
 
     _, indices = scores.sort(descending=True)
     groups = []
-    while len(indices) > 1:
+    while len(indices):
         idx, indices = indices[0], indices[1:]
         bbox = bboxes[idx]
         ious = iou_calculator(bbox, bboxes[indices])
@@ -53,10 +53,13 @@ def nms_torch(
             ious = torch.unsqueeze(ious, 0)
 
         close_indices = torch.where(ious > threshold)[1]
-        keep_indices = torch.ones_like(indices, dtype=torch.bool)
-        keep_indices[close_indices] = 0
-        groups.append(torch.cat((idx[None], indices[close_indices])))
-        indices = indices[keep_indices]
+        if len(indices) == 0:
+            groups.append(idx[None])
+        else:
+            keep_indices = torch.ones_like(indices, dtype=torch.bool)
+            keep_indices[close_indices] = 0
+            groups.append(torch.cat((idx[None], indices[close_indices])))
+            indices = indices[keep_indices]
 
     if return_group:
         return groups

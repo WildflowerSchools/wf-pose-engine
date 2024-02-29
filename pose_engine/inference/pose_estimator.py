@@ -14,7 +14,7 @@ import torch_tensorrt
 
 from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
-from mmengine.dataset import Compose, pseudo_collate
+from mmengine.dataset import Compose, default_collate
 from mmengine.model.wrappers import MMDistributedDataParallel
 from mmengine.registry import init_default_scope
 from mmpose.apis import init_model as init_pose_estimator
@@ -57,11 +57,17 @@ class PoseEstimator:
                 "Pose estimator must be initialized by providing a config + checkpoint pair"
             )
 
-        self.model_config_path = model_config_path
-
         self.checkpoint = checkpoint
+
+        self.model_config_path = model_config_path
+        self.model_config = load_config(self.model_config_path)[0]
+
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
+        if self.deployment_config_path is None:
+            self.deployment_config = None
+        else:
+            self.deployment_config = load_config(self.deployment_config_path)[0]
 
         self.device = device
         self.batch_size = batch_size
@@ -111,15 +117,13 @@ class PoseEstimator:
                     self.pose_estimator,
                     device_ids=[self.distributed_rank],
                     output_device=self.distributed_rank,
+                    static_graph=True,
                 )
                 logger.info(
                     f"Finished configuring pose estimator model for DDP on device {self.distributed_rank}"
                 )
 
         else:  # TensorRT
-            self.model_config, self.deployment_config = load_config(
-                self.model_config_path, self.deployment_config_path
-            )
             self.task_processor = build_task_processor(
                 model_cfg=self.model_config,
                 deploy_cfg=self.deployment_config,
@@ -142,11 +146,20 @@ class PoseEstimator:
                 f"Compiling pose estimator model (device: {self.device}) with '{self.compile_engine}' engine..."
             )
 
-            # Only compile the model's head, compiling the full model causes way too many graph recompilations
+            compileable_backbone_and_neck_module = None
+            compileable_backbone_and_neck_module_method = "extract_feat"
             if self.run_parallel or self.run_distributed:
-                compileable_module = self.pose_estimator.module.head
+                compileable_backbone_and_neck_module = self.pose_estimator.module
             else:
-                compileable_module = self.pose_estimator.head
+                compileable_backbone_and_neck_module = self.pose_estimator
+
+            # Compile the model's head, compiling the full model causes way too many graph recompilations
+            compileable_head_module = None
+            compileable_head_module_method = "forward"
+            if self.run_parallel or self.run_distributed:
+                compileable_head_module = self.pose_estimator.module.head
+            else:
+                compileable_head_module = self.pose_estimator.head
 
             if compile_engine == "inductor":
                 if self.compile_engine is not None and compile_engine == "inductor":
@@ -165,15 +178,27 @@ class PoseEstimator:
                         },
                     )
 
-                compiled_model = torch.compile(
-                    getattr(compileable_module, "forward"),
+                compiled_backbone_and_neck_module = torch.compile(
+                    getattr(
+                        compileable_backbone_and_neck_module,
+                        compileable_backbone_and_neck_module_method,
+                    ),
+                    dynamic=False,
+                    mode="default",
+                )
+
+                compiled_head_model = torch.compile(
+                    getattr(compileable_head_module, compileable_head_module_method),
                     dynamic=False,
                     mode="default",
                 )
             elif compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
-                compiled_model = torch.compile(
-                    getattr(compileable_module, "forward"),
+                compiled_backbone_and_neck_module = torch.compile(
+                    getattr(
+                        compileable_backbone_and_neck_module,
+                        compileable_backbone_and_neck_module_method,
+                    ),
                     backend="torch_tensorrt",
                     dynamic=False,
                     options={
@@ -182,57 +207,82 @@ class PoseEstimator:
                         # "debug": True,
                         "min_block_size": 10,
                         "torch_executed_ops": {"torch.ops.aten.sort.default"},
-                        "optimization_level": 3,
+                        "optimization_level": 1,
                         "use_python_runtime": False,
                         "device": self.device,
                     },
                 )
-            else:
-                compileable_module = None
 
-            if compileable_module is not None:
-                setattr(compileable_module, "forward", compiled_model)
+                compiled_head_model = torch.compile(
+                    getattr(compileable_head_module, compileable_head_module_method),
+                    backend="torch_tensorrt",
+                    dynamic=False,
+                    options={
+                        "truncate_long_and_double": True,
+                        "precision": torch.half if self.use_fp16 else torch.float,
+                        # "debug": True,
+                        "min_block_size": 10,
+                        "torch_executed_ops": {"torch.ops.aten.sort.default"},
+                        "optimization_level": 1,
+                        "use_python_runtime": False,
+                        "device": self.device,
+                    },
+                )
+
+            if compileable_backbone_and_neck_module is not None:
+                setattr(
+                    compileable_backbone_and_neck_module,
+                    compileable_backbone_and_neck_module_method,
+                    compiled_backbone_and_neck_module,
+                )
                 self.was_model_compiled = True
 
-                with (
-                    torch.cuda.amp.autocast()
-                    if self.use_fp16 and not self.using_tensort
-                    else nullcontext()
-                ):
-                    bboxes = None
-                    inference_mode = None
-                    if self.model_config["data_mode"] == "topdown":
-                        inference_mode = "topdown"
-                        imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
-
-                        bboxes = []
-                        for _ in range(self.batch_size):
-                            img_boxes = np.random.rand(
-                                randrange(0, 18), 5
-                            )  # For test inference, generate upto 18 bboxes (i.e. people) for each images
-                            img_boxes[:, :4] = np.asarray([0.0, 0.0, 972.0, 1296.0])
-                            bboxes.append(img_boxes)
-
-                        meta = list(map(lambda x: {"idx": x}, range(self.batch_size)))
-                    else:
-                        inference_mode = "onestage"
-                        imgs = list(np.random.rand(self.batch_size, 640, 640, 3))
-                        meta = {
-                            "idx": list(
-                                map(lambda x: {"idx": x}, range(self.batch_size))
-                            )
-                        }
-
-                    self.inference(
-                        inference_mode=inference_mode,
-                        imgs=imgs,
-                        bboxes=bboxes,
-                        meta=meta,
-                    )
-
-                logger.info(
-                    f"Finished compiling pose estimator mode (device: {self.device})"
+            if compileable_head_module is not None:
+                setattr(
+                    compileable_head_module,
+                    compileable_head_module_method,
+                    compiled_head_model,
                 )
+                self.was_model_compiled = True
+
+        self.pose_estimator = self.pose_estimator.to(memory_format=torch.channels_last)
+
+        if self.was_model_compiled:
+            with (
+                torch.cuda.amp.autocast()
+                if self.use_fp16 and not self.using_tensort
+                else nullcontext()
+            ):
+                inference_mode = None
+                bboxes = None
+                if self.model_config["data_mode"] == "topdown":
+                    inference_mode = "topdown"
+                    imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+
+                    bboxes = []
+                    for _ in range(self.batch_size):
+                        img_boxes = np.random.rand(
+                            randrange(0, 18), 5
+                        )  # For test inference, generate upto 18 bboxes (i.e. people) for each images
+                        img_boxes[:, :4] = np.asarray([0.0, 0.0, 972.0, 1296.0])
+                        bboxes.append(img_boxes)
+
+                    meta = list(map(lambda x: {"idx": x}, range(self.batch_size)))
+                else:
+                    inference_mode = "onestage"
+                    imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+                    meta = {"idx": list(map(lambda x: x, range(self.batch_size)))}
+
+                self.inference(
+                    inference_mode=inference_mode,
+                    imgs=imgs,
+                    bboxes=bboxes,
+                    meta=meta,
+                )
+
+            logger.info(
+                f"Finished compiling pose estimator mode (device: {self.device})"
+            )
 
         self._batch_count = mp.Value("i", 0)
         self._frame_count = mp.Value(
@@ -396,22 +446,33 @@ class PoseEstimator:
                     f"Running pose estimation against {len(sub_data_list)} data samples (device: {self.device})..."
                 )
 
-                batch = pseudo_collate(sub_data_list)
+                batch = default_collate(sub_data_list)  # pseudo_collate(sub_data_list)
 
                 # Make sure the batch size is consistent. If any items are missing, duplicate the last item in the batch to fill up the batch.
                 # We do this because torch.compile freaks out if it seems a different batch size. It triggers a graph recompilation that kills
                 # the application silently. No idea why that happens.
                 batch_fill = self.batch_size - len(sub_data_list)
                 if batch_fill > 0:
-                    repeated_input = list(
+                    # Extend the img inputs
+                    repeated_input = (
                         batch["inputs"][-1].unsqueeze(0).repeat(batch_fill, 1, 1, 1)
                     )
+                    if isinstance(batch["inputs"], list):
+                        batch["inputs"].extend([repeated_input])
+                    else:
+                        batch["inputs"] = torch.cat((batch["inputs"], repeated_input))
+
+                    # Extend the data_samples list
                     repeated_data_samples = [batch["data_samples"][-1]] * batch_fill
-                    batch["inputs"].extend(repeated_input)
                     batch["data_samples"].extend(repeated_data_samples)
 
+                batch["inputs"] = (
+                    batch["inputs"]
+                    .to(memory_format=torch.channels_last)
+                    .to(self.device)
+                )
+
                 with torch.no_grad():
-                    # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
                     if self.using_tensort:
                         input_shape = get_input_shape(self.deployment_config)
                         model_inputs, _ = self.task_processor.create_input(
@@ -444,6 +505,8 @@ class PoseEstimator:
                         if self.was_model_compiled:
                             torch.compiler.cudagraph_mark_step_begin()
 
+                        # for idx, _ in enumerate(batch['inputs']):
+                        #     batch['inputs'][idx] = batch['inputs'][idx].to(memory_format=torch.channels_last)
                         inference_results = self.pose_estimator.test_step(batch)
 
                     logger.info(
@@ -477,7 +540,8 @@ class PoseEstimator:
                 self._batch_count.value += 1
                 global_batch_idx = instance_batch_idx
 
-            self._time_waiting.value += current_loop_time - last_loop_start_time
+            with self._time_waiting.get_lock():
+                self._time_waiting.value += current_loop_time - last_loop_start_time
 
             with self._first_inference_time.get_lock():
                 if self._first_inference_time.value == -1:
@@ -504,12 +568,14 @@ class PoseEstimator:
                 imgs = []
                 for img_idx, img in enumerate(frames):
                     if isinstance(img, torch.Tensor):
-                        img = img.detach().cpu().numpy()
+                        # img = img.detach().cpu().numpy()
+                        img = img.numpy()
 
                     imgs.append(img)
 
                     if bboxes is not None and isinstance(bboxes[img_idx], torch.Tensor):
-                        bboxes[img_idx] = bboxes[img_idx].detach().cpu().numpy()
+                        # bboxes[img_idx] = bboxes[img_idx].detach().cpu().numpy()
+                        bboxes[img_idx] = bboxes[img_idx].numpy()
 
                 # TODO: Update inference_topdown to work with Tensors
 
@@ -641,7 +707,7 @@ class PoseEstimator:
                 )
 
                 logger.info(
-                    f"Completed pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds"
+                    f"Completed pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds - {round(len(frames) / (time.time() - current_loop_time), 2)} FPS"
                 )
             finally:
                 del bboxes
