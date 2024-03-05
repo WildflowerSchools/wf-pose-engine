@@ -138,6 +138,10 @@ class PoseEstimator:
             self.model_config, dataset_mode="train"
         )
 
+        from pose_engine.util import nms_torch
+
+        mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
+
         if self.use_fp16:
             self.pose_estimator = self.pose_estimator.half()
 
@@ -163,8 +167,6 @@ class PoseEstimator:
 
             if compile_engine == "inductor":
                 if self.compile_engine is not None and compile_engine == "inductor":
-                    from pose_engine.util import nms_torch
-
                     mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = torch.compile(
                         nms_torch,
                         # mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
@@ -472,6 +474,7 @@ class PoseEstimator:
                     .to(self.device)
                 )
 
+                s = time.time()
                 with torch.no_grad():
                     if self.using_tensort:
                         input_shape = get_input_shape(self.deployment_config)
@@ -501,7 +504,6 @@ class PoseEstimator:
                         # batch['inputs'] = list(map(lambda img_tensor: img_tensor.to(self.device), batch['inputs']))
                         # logger.info(f"Pose estimator pre-processing, move image tensors to GPU timing: {round(time.time() - s, 2)}")
 
-                        s = time.time()
                         if self.was_model_compiled:
                             torch.compiler.cudagraph_mark_step_begin()
 
