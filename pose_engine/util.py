@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import torch
 from torch import Tensor
+import torchvision
 
 from mmpose.structures.bbox import bbox_xywh2xyxy, bbox_overlaps
 
@@ -22,6 +23,12 @@ def str_to_date(date_str):
 
 
 def nms_torch(
+    bboxes, scores, threshold=0.65, iou_calculator=bbox_overlaps, return_group=False
+):
+    return torchvision.ops.nms(boxes=bboxes, scores=scores, iou_threshold=threshold)
+
+
+def nms_torch_optimized(
     bboxes, scores, threshold=0.65, iou_calculator=bbox_overlaps, return_group=False
 ):
 

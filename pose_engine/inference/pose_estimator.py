@@ -432,7 +432,7 @@ class PoseEstimator:
             records_per_second = round(len(data_list) / total_pre_processing_time, 2)
 
         logger.info(
-            f"Pose estimator data pipeline pre-processing time (device: {self.device}): {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
+            f"Pose estimator data pipeline pre-processing performance (device: {self.device}): {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
         )
 
         results = []
@@ -532,10 +532,13 @@ class PoseEstimator:
 
         is_topdown = False
 
-        last_loop_start_time = time.time()
-        self._start_time.value = last_loop_start_time
+        last_loop_start_time = None
+        self._start_time.value = time.time()
         for instance_batch_idx, data in enumerate(loader):
             current_loop_time = time.time()
+            seconds_between_loops = 0
+            if last_loop_start_time is not None:
+                seconds_between_loops = current_loop_time - last_loop_start_time
 
             global_batch_idx = instance_batch_idx
             with self._batch_count.get_lock():
@@ -543,7 +546,7 @@ class PoseEstimator:
                 global_batch_idx = instance_batch_idx
 
             with self._time_waiting.get_lock():
-                self._time_waiting.value += current_loop_time - last_loop_start_time
+                self._time_waiting.value += seconds_between_loops
 
             with self._first_inference_time.get_lock():
                 if self._first_inference_time.value == -1:
@@ -562,7 +565,7 @@ class PoseEstimator:
 
             try:
                 logger.info(
-                    f"Processing pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames"
+                    f"Processing pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames - Seconds since last batch {round(seconds_between_loops, 3)}"
                 )
 
                 self._frame_count.value += len(frames)
@@ -633,7 +636,7 @@ class PoseEstimator:
                             self._inference_count.value += len(pose_result_bboxes)
 
                         logger.info(
-                            f"Pose estimator pose-processing nearby_joints_nms (device: {self.device}): {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
+                            f"Pose estimation batch #{global_batch_idx} nearby_joints_nms performance (device: {self.device}): {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
                         )
 
                 # data_samples = merge_data_samples(pose_results)
@@ -699,24 +702,24 @@ class PoseEstimator:
                             )
 
                 logger.info(
-                    f"Pose estimation batch #{global_batch_idx} prepare results for yield time (device: {self.device}): {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
+                    f"Pose estimation batch #{global_batch_idx} prepare results for yield time performance (device: {self.device}): {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
                 )
 
                 start_yield_results_time = time.time()
                 yield poses_to_yield
                 logger.info(
-                    f"Pose estimation batch #{global_batch_idx} yield time (device: {self.device}): {round(time.time() - start_yield_results_time, 2)} seconds"
+                    f"Pose estimation batch #{global_batch_idx} yield time performance (device: {self.device}): {round(time.time() - start_yield_results_time, 2)} seconds"
                 )
 
                 logger.info(
-                    f"Completed pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds - {round(len(frames) / (time.time() - current_loop_time), 2)} FPS"
+                    f"Completed pose estimation batch #{global_batch_idx} overall performance (device: {self.device}) - Includes {len(frames)} frames - {round(time.time() - current_loop_time, 2)} seconds - {round(len(frames) / (time.time() - current_loop_time), 2)} FPS"
                 )
             finally:
                 del bboxes
                 del frames
                 del meta
 
-            last_loop_start_time = time.time()
+            last_loop_start_time = current_loop_time
 
         self._stop_time.value = time.time()
 
