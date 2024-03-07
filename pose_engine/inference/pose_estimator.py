@@ -9,6 +9,7 @@ import torch
 import torch._dynamo as torchdynamo
 import torch.multiprocessing as mp
 import torch.utils.data
+import torchvision
 
 import torch_tensorrt
 
@@ -29,6 +30,7 @@ from mmpose.evaluation.functional import nearby_joints_nms
 
 from PIL import Image
 
+from pose_engine.mmpose.transforms import BatchBottomupResize
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
 from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader
 from pose_engine.log import logger
@@ -133,12 +135,25 @@ class PoseEstimator:
                 [self.checkpoint]
             )
 
-        self.pipeline = Compose(self.model_config.test_dataloader.dataset.pipeline)
+        self.pipeline = self.model_config.test_dataloader.dataset.pipeline
+
+        # Modify the pipeline by slicing out the default BottomupResize method
+        # BottomupResize does not batch process. Below, we substitute in a
+        # torchvision resize method that can take advantage of batching
+        modified_pipeline = []
+        self.batch_bottomup_resize_transform = None
+        for stage in self.pipeline:
+            if stage["type"] == "BottomupResize":
+                self.batch_bottomup_resize_transform = BatchBottomupResize(**stage)
+            else:
+                modified_pipeline.append(stage)
+
+        self.pipeline = Compose(modified_pipeline)
         self.dataset_meta = dataset_meta_from_config(
             self.model_config, dataset_mode="train"
         )
 
-        from pose_engine.util import nms_torch
+        from pose_engine.mmpose.misc import nms_torch
 
         mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
 
@@ -377,6 +392,7 @@ class PoseEstimator:
         data_list = []
         meta_mapping = []
         total_pre_processing_time = 0
+
         for img_idx, img in enumerate(imgs):
             if inference_mode == "topdown":
                 img_bboxes = bboxes[img_idx]
@@ -422,9 +438,21 @@ class PoseEstimator:
             data_info.update(self.dataset_meta)
             s = time.time()
             processed_pipeline_data = self.pipeline(data_info)
+            processed_pipeline_data["inputs"] = processed_pipeline_data["inputs"].to(
+                self.device
+            )
             total_pre_processing_time += time.time() - s
 
             data_list.append(processed_pipeline_data)
+
+        # Batch resizing consumes an outsized chunk of CUDA memory, so split this step across two passes
+        data_list_chunk_size = (len(data_list) // 2) + 1
+        for ii in range(0, len(data_list), data_list_chunk_size):
+            data_list[ii : ii + data_list_chunk_size] = (
+                self.batch_bottomup_resize_transform.transform(
+                    data_list[ii : ii + data_list_chunk_size]
+                )
+            )
 
         if total_pre_processing_time == 0:
             records_per_second = "N/A"
