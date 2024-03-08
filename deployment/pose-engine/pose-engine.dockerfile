@@ -40,44 +40,52 @@ RUN git clone https://github.com/pyenv/pyenv.git ${PYENV_ROOT} && \
 # Install NPM (not required to run pose-engine)
 # RUN curl -fsSL https://deb.nodesource.com/setup_21.x | bash - && \
 #     apt install -y nodejs npm
-
-# Install POETRY
-# ENV POETRY_HOME="/etc/poetry" \
     
 ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
-# ENV PATH="${PATH}:${POETRY_HOME}/bin"
 
 RUN curl -sSL https://install.python-poetry.org | python3 -
 
 WORKDIR /app
 
+ENV POETRY_NO_INTERACTION=1 \
+    POETRY_VIRTUALENVS_IN_PROJECT=1 \
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_CACHE_DIR=/tmp/poetry_cache
+
 COPY pyproject.toml poetry.lock ./
+
 RUN eval "$(pyenv init -)" && pyenv local ${PYTHON_VERSION} && \
-    poetry config virtualenvs.in-project true --local && \
-    poetry env use $(which python) && \
-    . $(poetry env info --path)/bin/activate && \
-    pip install setuptools wheel six auditwheel && \
-    pip install chumpy faster_fifo
-RUN poetry install --only main --no-root --no-interaction --no-ansi && \
+    poetry env use $(which python)  && \
+    poetry run pip install setuptools wheel six auditwheel && \
+    poetry run pip install chumpy faster_fifo && \
+    poetry install --only main --no-root --no-interaction --no-ansi && \
     poetry run mim install mmcv==2.1.0 && \
-    poetry run pip install torch_tensorrt
+    poetry run pip install torch_tensorrt && \
+    rm -rf $POETRY_CACHE_DIR
 
-# FROM nvidia/cuda:12.3.2-devel-ubuntu22.04 as runtime
+FROM nvidia/cuda:12.3.2-runtime-ubuntu22.04 as runtime
 
-# ARG PYENV_ROOT
-# ENV PYENV_ROOT=${PYENV_ROOT}
-# ARG POETRY_HOME
-# ENV POETRY_HOME=${POETRY_HOME}
+ARG PYENV_ROOT
+ENV PYENV_ROOT=${PYENV_ROOT}
+ARG POETRY_HOME
+ENV POETRY_HOME=${POETRY_HOME}
 
-# COPY --from=build ${PYENV_ROOT} ${PYENV_ROOT}
-# COPY --from=build ${POETRY_HOME} ${POETRY_HOME}
-# COPY --from=build /app /app
+ENV DEBIAN_FRONTEND=noninteractive
+# LC_ALL=POSIX prevents an issue with CUDA changing the locale during python script runtime
+ENV LC_ALL=POSIX
 
-# ENV PATH="${PYENV_ROOT}/shims:${PYENV_ROOT}/bin:$POETRY_HOME/bin:${PATH}"
+RUN apt update -y && \
+    apt install -y ffmpeg tensorrt
 
-# WORKDIR /app
+COPY --from=build ${PYENV_ROOT} ${PYENV_ROOT}
+COPY --from=build /app /app
+
+WORKDIR /app
+
+ENV VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
 
 COPY configs ./configs
 COPY pose_engine ./pose_engine
 
-ENTRYPOINT ["poetry", "run", "python", "-m", "pose_engine"]
+ENTRYPOINT ["python", "-m", "pose_engine"]
