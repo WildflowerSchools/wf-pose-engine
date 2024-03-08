@@ -166,7 +166,7 @@ class PoseEstimator:
             )
 
             compileable_backbone_and_neck_module = None
-            compileable_backbone_and_neck_module_method = "extract_feat"
+            compileable_backbone_and_neck_module_method = "extract_feat"  # "forward"
             if self.run_parallel or self.run_distributed:
                 compileable_backbone_and_neck_module = self.pose_estimator.module
             else:
@@ -179,6 +179,7 @@ class PoseEstimator:
                 compileable_head_module = self.pose_estimator.module.head
             else:
                 compileable_head_module = self.pose_estimator.head
+            # compileable_head_module = None
 
             if compile_engine == "inductor":
                 if self.compile_engine is not None and compile_engine == "inductor":
@@ -204,11 +205,14 @@ class PoseEstimator:
                     mode="default",
                 )
 
-                compiled_head_model = torch.compile(
-                    getattr(compileable_head_module, compileable_head_module_method),
-                    dynamic=False,
-                    mode="default",
-                )
+                if compileable_head_module is not None:
+                    compiled_head_model = torch.compile(
+                        getattr(
+                            compileable_head_module, compileable_head_module_method
+                        ),
+                        dynamic=False,
+                        mode="default",
+                    )
             elif compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
                 compiled_backbone_and_neck_module = torch.compile(
@@ -438,9 +442,7 @@ class PoseEstimator:
             data_info.update(self.dataset_meta)
             s = time.time()
             processed_pipeline_data = self.pipeline(data_info)
-            processed_pipeline_data["inputs"] = processed_pipeline_data["inputs"].to(
-                self.device
-            )
+            processed_pipeline_data["inputs"] = processed_pipeline_data["inputs"]
             total_pre_processing_time += time.time() - s
 
             data_list.append(processed_pipeline_data)
@@ -450,7 +452,8 @@ class PoseEstimator:
         for ii in range(0, len(data_list), data_list_chunk_size):
             data_list[ii : ii + data_list_chunk_size] = (
                 self.batch_bottomup_resize_transform.transform(
-                    data_list[ii : ii + data_list_chunk_size]
+                    data_list=data_list[ii : ii + data_list_chunk_size],
+                    device=self.device,
                 )
             )
 

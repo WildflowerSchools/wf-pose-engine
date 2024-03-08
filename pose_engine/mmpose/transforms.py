@@ -85,7 +85,9 @@ class BatchBottomupResize:
 
         return actual_input_size, padded_input_size
 
-    def transform(self, data_list: List[Dict]) -> Optional[dict]:
+    def transform(
+        self, data_list: List[Dict], device: Optional[str] = None
+    ) -> Optional[dict]:
         """The transform function of :class:`BottomupResize` to perform
         photometric distortion on images.
 
@@ -101,8 +103,16 @@ class BatchBottomupResize:
         if len(data_list) == 0:
             return []
 
-        imgs = torch.stack(list(map(lambda r: r["inputs"], data_list)))
+        if device is None:
+            device = "cpu"
 
+        imgs = (
+            torch.stack(list(map(lambda r: r["inputs"], data_list)))
+            .to(
+                memory_format=torch.channels_last
+            )  # Pytorch recommends using this option, but it doesn't appear to speed things up
+            .to(device)
+        )
         single_data_sample: PoseDataSample = data_list[0]["data_samples"]
 
         img_h, img_w = single_data_sample.get("ori_shape")
