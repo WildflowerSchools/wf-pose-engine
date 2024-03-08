@@ -1,6 +1,7 @@
 from ctypes import c_bool
 from multiprocessing import sharedctypes
 import time
+from typing import Optional
 import queue
 
 import torch
@@ -15,14 +16,14 @@ class BoundingBoxesDataset(torch.utils.data.IterableDataset):
         self,
         bbox_queue_maxsize: int = 120,
         wait_for_bboxes: bool = True,
-        mp_manager=None,
+        mp_manager: Optional[mp.Manager] = None,
     ):
         super().__init__()
 
         self.done_loading_dataset: sharedctypes.Synchronized = mp.Value(c_bool, False)
 
-        self.bbox_queue_maxsize = bbox_queue_maxsize
-        self.wait_for_bboxes = wait_for_bboxes
+        self.bbox_queue_maxsize: int = bbox_queue_maxsize
+        self.wait_for_bboxes: bool = wait_for_bboxes
 
         self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
 

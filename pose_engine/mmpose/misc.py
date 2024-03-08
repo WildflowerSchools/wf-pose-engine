@@ -4,6 +4,7 @@ import torchvision
 
 from mmpose.structures.bbox import bbox_overlaps
 
+from mmpose.utils.logger import logging
 
 def nms_torch(
     bboxes, scores, threshold=0.65, iou_calculator=bbox_overlaps, return_group=False

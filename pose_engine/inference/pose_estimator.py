@@ -9,9 +9,8 @@ import torch
 import torch._dynamo as torchdynamo
 import torch.multiprocessing as mp
 import torch.utils.data
-import torchvision
 
-import torch_tensorrt
+import torch_tensorrt  # DO NOT DELETE
 
 from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
@@ -22,7 +21,6 @@ from mmpose.apis import init_model as init_pose_estimator
 from mmpose.apis.inference import dataset_meta_from_config
 from mmpose.structures import PoseDataSample
 from mmpose.structures.bbox import bbox_xywh2xyxy
-
 import mmpose.models.heads.hybrid_heads.rtmo_head
 import mmpose.evaluation.functional
 import mmpose.evaluation.functional.nms
@@ -34,6 +32,10 @@ from pose_engine.mmpose.transforms import BatchBottomupResize
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
 from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader
 from pose_engine.log import logger
+
+from pose_engine.mmpose.misc import nms_torch
+
+mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
 
 
 class PoseEstimator:
@@ -63,6 +65,9 @@ class PoseEstimator:
 
         self.model_config_path = model_config_path
         self.model_config = load_config(self.model_config_path)[0]
+        self.dataset_meta = dataset_meta_from_config(
+            self.model_config, dataset_mode="train"
+        )
 
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
@@ -70,7 +75,7 @@ class PoseEstimator:
             self.deployment_config = None
         else:
             self.deployment_config = load_config(self.deployment_config_path)[0]
-
+        
         self.device = device
         self.batch_size = batch_size
         self.use_fp16 = use_fp16
@@ -90,10 +95,82 @@ class PoseEstimator:
         logger.info(f"Initializing pose estimator (device: {self.device})...")
 
         self.lock = mp.Lock()
+        self._batch_count = mp.Value("i", 0)
+        self._frame_count = mp.Value(
+            "i", 0
+        )  # Each frame contains multiple boxes, so we track frames separately from inferences
+        self._inference_count = mp.Value("i", 0)
+        self._start_time = mp.Value("d", -1.0)
+        self._stop_time = mp.Value("d", -1.0)
+        self._first_inference_time = mp.Value("d", -1.0)
+        self._time_waiting = mp.Value("d", 0)
 
         self.pose_estimator = None
         self.task_processor = None
+        self.pipeline = None
+        self.batch_bottomup_resize_transform = None
 
+        self._init_model()
+        self._init_pipeline()
+
+        if self.use_fp16:
+            self.pose_estimator = self.pose_estimator.half()
+        self.pose_estimator = self.pose_estimator.to(memory_format=torch.channels_last)
+
+        self._compile_model()
+        self._warmup_model()
+
+        logger.info(f"Finished initializing pose estimator (device: {self.device})")
+
+    @property
+    def frame_count(self) -> int:
+        return self._frame_count.value
+
+    @property
+    def inference_count(self) -> int:
+        return self._inference_count.value
+
+    @property
+    def start_time(self) -> float:
+        return self._start_time.value
+
+    @property
+    def stop_time(self) -> float:
+        return self._stop_time.value
+
+    @property
+    def first_inference_time(self) -> float:
+        return self._first_inference_time.value
+
+    @property
+    def running_time_from_start(self) -> float:
+        if self.start_time == -1:
+            return 0
+
+        current_time_or_stop_time = time.time()
+        if self.stop_time > -1.0:
+            current_time_or_stop_time = self.stop_time
+
+        return current_time_or_stop_time - self.start_time
+
+    @property
+    def running_time_from_first_inference(self) -> float:
+        if self.first_inference_time == -1:
+            return 0
+
+        current_time_or_stop_time = time.time()
+        if self.stop_time > -1.0:
+            current_time_or_stop_time = self.stop_time
+
+        return current_time_or_stop_time - self.first_inference_time
+
+    @property
+    def time_waiting(self) -> int:
+        return self._time_waiting.value
+
+    def _init_model(
+        self
+    ):
         self.using_tensort = self.deployment_config_path is not None
         if not self.using_tensort:  # Standard PYTorch
             self.pose_estimator = init_pose_estimator(
@@ -103,7 +180,7 @@ class PoseEstimator:
             )
             self.pose_estimator.share_memory()
 
-            self.model_config = self.pose_estimator.cfg
+            # self.model_config = self.pose_estimator.cfg
 
             if self.run_parallel:
                 self.pose_estimator = MMLabCompatibleDataParallel(
@@ -135,13 +212,15 @@ class PoseEstimator:
                 [self.checkpoint]
             )
 
+    def _init_pipeline(
+        self
+    ):
         self.pipeline = self.model_config.test_dataloader.dataset.pipeline
 
         # Modify the pipeline by slicing out the default BottomupResize method
         # BottomupResize does not batch process. Below, we substitute in a
         # torchvision resize method that can take advantage of batching
         modified_pipeline = []
-        self.batch_bottomup_resize_transform = None
         for stage in self.pipeline:
             if stage["type"] == "BottomupResize":
                 self.batch_bottomup_resize_transform = BatchBottomupResize(**stage)
@@ -149,17 +228,10 @@ class PoseEstimator:
                 modified_pipeline.append(stage)
 
         self.pipeline = Compose(modified_pipeline)
-        self.dataset_meta = dataset_meta_from_config(
-            self.model_config, dataset_mode="train"
-        )
-
-        from pose_engine.mmpose.misc import nms_torch
-
-        mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
-
-        if self.use_fp16:
-            self.pose_estimator = self.pose_estimator.half()
-
+    
+    def _compile_model(
+        self
+    ):
         if self.compile_engine is not None:
             logger.info(
                 f"Compiling pose estimator model (device: {self.device}) with '{self.compile_engine}' engine..."
@@ -181,11 +253,10 @@ class PoseEstimator:
                 compileable_head_module = self.pose_estimator.head
             # compileable_head_module = None
 
-            if compile_engine == "inductor":
-                if self.compile_engine is not None and compile_engine == "inductor":
+            if self.compile_engine == "inductor":
+                if self.compile_engine is not None and self.compile_engine == "inductor":
                     mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = torch.compile(
-                        nms_torch,
-                        # mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
+                        mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
                         dynamic=True,
                         # DO NOT ENABLE max-autotune mode, it enables triton.cudagraphs which leads to an Exception. Must set max_autotune in inductor options.
                         #   ERROR: These live storage data ptrs are in the cudagraph pool but not accounted for as an output of cudagraph trees:
@@ -213,7 +284,7 @@ class PoseEstimator:
                         dynamic=False,
                         mode="default",
                     )
-            elif compile_engine == "tensorrt":
+            elif self.compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
                 compiled_backbone_and_neck_module = torch.compile(
                     getattr(
@@ -266,103 +337,47 @@ class PoseEstimator:
                 )
                 self.was_model_compiled = True
 
-        self.pose_estimator = self.pose_estimator.to(memory_format=torch.channels_last)
+    def _warmup_model(self):
+        logger.info(
+            f"Warming up pose estimator model (device: {self.device})"
+        )
 
-        if self.was_model_compiled:
-            with (
+        with (
                 torch.cuda.amp.autocast()
                 if self.use_fp16 and not self.using_tensort
                 else nullcontext()
-            ):
-                inference_mode = None
-                bboxes = None
-                if self.model_config["data_mode"] == "topdown":
-                    inference_mode = "topdown"
-                    imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+        ):
+            inference_mode = None
+            bboxes = None
+            if self.model_config["data_mode"] == "topdown":
+                inference_mode = "topdown"
+                imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
 
-                    bboxes = []
-                    for _ in range(self.batch_size):
-                        img_boxes = np.random.rand(
-                            randrange(0, 18), 5
-                        )  # For test inference, generate upto 18 bboxes (i.e. people) for each images
-                        img_boxes[:, :4] = np.asarray([0.0, 0.0, 972.0, 1296.0])
-                        bboxes.append(img_boxes)
+                bboxes = []
+                for _ in range(self.batch_size):
+                    img_boxes = np.random.rand(
+                        randrange(0, 18), 5
+                    )  # For test inference, generate upto 18 bboxes (i.e. people) for each images
+                    img_boxes[:, :4] = np.asarray([0.0, 0.0, 972.0, 1296.0])
+                    bboxes.append(img_boxes)
 
-                    meta = list(map(lambda x: {"idx": x}, range(self.batch_size)))
-                else:
-                    inference_mode = "onestage"
-                    imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
-                    meta = {"idx": list(map(lambda x: x, range(self.batch_size)))}
+                meta = list(map(lambda x: {"idx": x}, range(self.batch_size)))
+            else:
+                inference_mode = "onestage"
+                imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+                meta = {"idx": list(map(lambda x: x, range(self.batch_size)))}
 
-                self.inference(
-                    inference_mode=inference_mode,
-                    imgs=imgs,
-                    bboxes=bboxes,
-                    meta=meta,
-                )
-
-            logger.info(
-                f"Finished compiling pose estimator mode (device: {self.device})"
+            self.inference(
+                inference_mode=inference_mode,
+                imgs=imgs,
+                bboxes=bboxes,
+                meta=meta,
             )
 
-        self._batch_count = mp.Value("i", 0)
-        self._frame_count = mp.Value(
-            "i", 0
-        )  # Each frame contains multiple boxes, so we track frames separately from inferences
-        self._inference_count = mp.Value("i", 0)
-        self._start_time = mp.Value("d", -1.0)
-        self._stop_time = mp.Value("d", -1.0)
-        self._first_inference_time = mp.Value("d", -1.0)
-        self._time_waiting = mp.Value("d", 0)
-
-        logger.info(f"Finished initializing pose estimator (device: {self.device})")
-
-    @property
-    def frame_count(self) -> int:
-        return self._frame_count.value
-
-    @property
-    def inference_count(self) -> int:
-        return self._inference_count.value
-
-    @property
-    def start_time(self) -> float:
-        return self._start_time.value
-
-    @property
-    def stop_time(self) -> float:
-        return self._stop_time.value
-
-    @property
-    def first_inference_time(self) -> float:
-        return self._first_inference_time.value
-
-    @property
-    def running_time_from_start(self) -> float:
-        if self.start_time == -1:
-            return 0
-
-        current_time_or_stop_time = time.time()
-        if self.stop_time > -1.0:
-            current_time_or_stop_time = self.stop_time
-
-        return current_time_or_stop_time - self.start_time
-
-    @property
-    def running_time_from_first_inference(self) -> float:
-        if self.first_inference_time == -1:
-            return 0
-
-        current_time_or_stop_time = time.time()
-        if self.stop_time > -1.0:
-            current_time_or_stop_time = self.stop_time
-
-        return current_time_or_stop_time - self.first_inference_time
-
-    @property
-    def time_waiting(self) -> int:
-        return self._time_waiting.value
-
+        logger.info(
+            f"Finished warming up pose estimator model (device: {self.device})"
+        )
+        
     def inference(
         self,
         imgs: Union[list[np.ndarray], list[str]],
