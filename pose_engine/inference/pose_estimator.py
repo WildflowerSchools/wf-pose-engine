@@ -457,20 +457,26 @@ class PoseEstimator:
             data_info.update(self.dataset_meta)
             s = time.time()
             processed_pipeline_data = self.pipeline(data_info)
-            processed_pipeline_data["inputs"] = processed_pipeline_data["inputs"]
+            # processed_pipeline_data["inputs"] = processed_pipeline_data["inputs"]
             total_pre_processing_time += time.time() - s
 
             data_list.append(processed_pipeline_data)
 
+        s = time.time()
         # Batch resizing consumes an outsized chunk of CUDA memory, so split this step across two passes
-        data_list_chunk_size = (len(data_list) // 2) + 1
-        for ii in range(0, len(data_list), data_list_chunk_size):
-            data_list[ii : ii + data_list_chunk_size] = (
-                self.batch_bottomup_resize_transform.transform(
-                    data_list=data_list[ii : ii + data_list_chunk_size],
-                    device=self.device,
-                )
-            )
+        data_list = self.batch_bottomup_resize_transform.transform(
+            data_list=data_list,
+            device=self.device,
+        )
+        total_pre_processing_time += time.time() - s
+        # data_list_chunk_size = (len(data_list) // 2) + 1
+        # for ii in range(0, len(data_list), data_list_chunk_size):
+        #     data_list[ii : ii + data_list_chunk_size] = (
+        #         self.batch_bottomup_resize_transform.transform(
+        #             data_list=data_list[ii : ii + data_list_chunk_size],
+        #             device=self.device,
+        #         )
+        #     )
 
         if total_pre_processing_time == 0:
             records_per_second = "N/A"
