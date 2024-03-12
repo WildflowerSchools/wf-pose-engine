@@ -7,6 +7,7 @@ import numpy as np
 
 from mmpose.utils.typing import PoseDataSample
 
+from pose_engine.log import logger
 
 class BatchBottomupResize:
     def __init__(
@@ -138,9 +139,11 @@ class BatchBottomupResize:
                 dtype=np.float32,
             )
 
+            logger.info(f"BatchBottomupResize - resizing {len(imgs)} images...")
             imgs_for_input_sizes.append(
                 torchvision.transforms.Resize(padded_input_size)(imgs)
             )
+            logger.info(f"BatchBottomupResize - done resizing {len(imgs)} images")
 
             if ii == 0:
                 # Store the transform information w.r.t. the main input size
