@@ -109,7 +109,7 @@ class VideoFetch:
             video_metadata=video_metadata,
             local_video_directory=self.raw_video_cache_dir,
             video_client=self.client,
-            max_workers=10
+            max_workers=10,
         )
 
     def fetch(

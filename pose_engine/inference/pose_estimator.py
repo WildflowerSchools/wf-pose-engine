@@ -24,7 +24,8 @@ from mmpose.structures.bbox import bbox_xywh2xyxy
 import mmpose.models.heads.hybrid_heads.rtmo_head
 import mmpose.evaluation.functional
 import mmpose.evaluation.functional.nms
-from mmpose.evaluation.functional import nearby_joints_nms
+
+# from mmpose.evaluation.functional import nearby_joints_nms
 
 from PIL import Image
 
@@ -32,8 +33,7 @@ from pose_engine.mmpose.transforms import BatchBottomupResize
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
 from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader
 from pose_engine.log import logger
-
-from pose_engine.mmpose.misc import nms_torch
+from pose_engine.mmpose.misc import nms_torch, nearby_joints_nms
 
 mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
 
@@ -75,7 +75,7 @@ class PoseEstimator:
             self.deployment_config = None
         else:
             self.deployment_config = load_config(self.deployment_config_path)[0]
-        
+
         self.device = device
         self.batch_size = batch_size
         self.use_fp16 = use_fp16
@@ -168,9 +168,7 @@ class PoseEstimator:
     def time_waiting(self) -> int:
         return self._time_waiting.value
 
-    def _init_model(
-        self
-    ):
+    def _init_model(self):
         self.using_tensort = self.deployment_config_path is not None
         if not self.using_tensort:  # Standard PYTorch
             self.pose_estimator = init_pose_estimator(
@@ -212,9 +210,7 @@ class PoseEstimator:
                 [self.checkpoint]
             )
 
-    def _init_pipeline(
-        self
-    ):
+    def _init_pipeline(self):
         self.pipeline = self.model_config.test_dataloader.dataset.pipeline
 
         # Modify the pipeline by slicing out the default BottomupResize method
@@ -228,15 +224,14 @@ class PoseEstimator:
                 modified_pipeline.append(stage)
 
         self.pipeline = Compose(modified_pipeline)
-    
-    def _compile_model(
-        self
-    ):
+
+    def _compile_model(self):
         if self.compile_engine is not None:
             logger.info(
                 f"Compiling pose estimator model (device: {self.device}) with '{self.compile_engine}' engine..."
             )
 
+            compiled_backbone_and_neck_module = None
             compileable_backbone_and_neck_module = None
             compileable_backbone_and_neck_module_method = "extract_feat"  # "forward"
             if self.run_parallel or self.run_distributed:
@@ -244,84 +239,134 @@ class PoseEstimator:
             else:
                 compileable_backbone_and_neck_module = self.pose_estimator
 
+            compiled_data_preprocessor_module = None
+            compileable_data_preprocessor_module = None
+            compileable_data_preprocessor_module_method = "forward"
+            if (
+                False
+            ):  # DISABLED INTENTIONALLY: No benefit, in fact this negatively impacts throughput
+                if self.run_parallel or self.run_distributed:
+                    compileable_data_preprocessor_module = (
+                        self.pose_estimator.module.data_preprocessor
+                    )
+                else:
+                    compileable_data_preprocessor_module = (
+                        self.pose_estimator.data_preprocessor
+                    )
+
             # Compile the model's head, compiling the full model causes way too many graph recompilations
+            compiled_head_module = None
             compileable_head_module = None
             compileable_head_module_method = "forward"
             if self.run_parallel or self.run_distributed:
                 compileable_head_module = self.pose_estimator.module.head
             else:
                 compileable_head_module = self.pose_estimator.head
-            # compileable_head_module = None
+
+            compiled_dcc_module = None
+            compileable_dcc_module = None
+            compileable_dcc_module_method = "forward_test"
+            if self.run_parallel or self.run_distributed:
+                compileable_dcc_module = self.pose_estimator.module.head.dcc
+            else:
+                compileable_dcc_module = self.pose_estimator.head.dcc
 
             if self.compile_engine == "inductor":
-                if self.compile_engine is not None and self.compile_engine == "inductor":
-                    mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = torch.compile(
-                        mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
-                        dynamic=True,
-                        # DO NOT ENABLE max-autotune mode, it enables triton.cudagraphs which leads to an Exception. Must set max_autotune in inductor options.
-                        #   ERROR: These live storage data ptrs are in the cudagraph pool but not accounted for as an output of cudagraph trees:
-                        # mode="max-autotune",
-                        options={
-                            "max_autotune": True,
-                            "triton.cudagraphs": False,  # This must be set to False
-                        },
+                if (
+                    self.compile_engine is not None
+                    and self.compile_engine == "inductor"
+                ):
+                    mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = (
+                        torch.compile(
+                            mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
+                            dynamic=True,
+                            mode="max-autotune-no-cudagraphs",
+                        )
                     )
 
-                compiled_backbone_and_neck_module = torch.compile(
-                    getattr(
-                        compileable_backbone_and_neck_module,
-                        compileable_backbone_and_neck_module_method,
-                    ),
-                    dynamic=False,
-                    mode="default",
-                )
+                if compileable_backbone_and_neck_module is not None:
+                    compiled_backbone_and_neck_module = torch.compile(
+                        getattr(
+                            compileable_backbone_and_neck_module,
+                            compileable_backbone_and_neck_module_method,
+                        ),
+                        dynamic=False,
+                        mode="max-autotune-no-cudagraphs",
+                    )
+
+                if compileable_data_preprocessor_module is not None:
+                    compiled_data_preprocessor_module = torch.compile(
+                        getattr(
+                            compileable_data_preprocessor_module,
+                            compileable_data_preprocessor_module_method,
+                        ),
+                        dynamic=True,
+                        mode="max-autotune-no-cudagraphs",
+                    )
 
                 if compileable_head_module is not None:
-                    compiled_head_model = torch.compile(
+                    compiled_head_module = torch.compile(
                         getattr(
                             compileable_head_module, compileable_head_module_method
                         ),
                         dynamic=False,
-                        mode="default",
+                        mode="max-autotune-no-cudagraphs",
+                    )
+
+                if compileable_dcc_module is not None:
+                    compiled_dcc_module = torch.compile(
+                        getattr(
+                            compileable_dcc_module,
+                            compileable_dcc_module_method,
+                        ),
+                        dynamic=True,
+                        mode="max-autotune-no-cudagraphs",
                     )
             elif self.compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
-                compiled_backbone_and_neck_module = torch.compile(
-                    getattr(
-                        compileable_backbone_and_neck_module,
-                        compileable_backbone_and_neck_module_method,
-                    ),
-                    backend="torch_tensorrt",
-                    dynamic=False,
-                    options={
-                        "truncate_long_and_double": True,
-                        "precision": torch.half if self.use_fp16 else torch.float,
-                        # "debug": True,
-                        "min_block_size": 10,
-                        "torch_executed_ops": {"torch.ops.aten.sort.default"},
-                        "optimization_level": 1,
-                        "use_python_runtime": False,
-                        "device": self.device,
-                    },
-                )
+                if compileable_backbone_and_neck_module is not None:
+                    compiled_backbone_and_neck_module = torch.compile(
+                        getattr(
+                            compileable_backbone_and_neck_module,
+                            compileable_backbone_and_neck_module_method,
+                        ),
+                        backend="torch_tensorrt",
+                        dynamic=False,
+                        options={
+                            "truncate_long_and_double": True,
+                            "precision": torch.half if self.use_fp16 else torch.float,
+                            # "debug": True,
+                            "min_block_size": 10,
+                            "torch_executed_ops": {"torch.ops.aten.sort.default"},
+                            "optimization_level": 1,
+                            "use_python_runtime": False,
+                            "device": self.device,
+                        },
+                    )
 
-                compiled_head_model = torch.compile(
-                    getattr(compileable_head_module, compileable_head_module_method),
-                    backend="torch_tensorrt",
-                    dynamic=False,
-                    options={
-                        "truncate_long_and_double": True,
-                        "precision": torch.half if self.use_fp16 else torch.float,
-                        # "debug": True,
-                        "min_block_size": 10,
-                        "torch_executed_ops": {"torch.ops.aten.sort.default"},
-                        "optimization_level": 1,
-                        "use_python_runtime": False,
-                        "device": self.device,
-                    },
-                )
+                if compileable_head_module is not None:
+                    compiled_head_module = torch.compile(
+                        getattr(
+                            compileable_head_module, compileable_head_module_method
+                        ),
+                        backend="torch_tensorrt",
+                        dynamic=False,
+                        options={
+                            "truncate_long_and_double": True,
+                            "precision": torch.half if self.use_fp16 else torch.float,
+                            # "debug": True,
+                            "min_block_size": 10,
+                            "torch_executed_ops": {"torch.ops.aten.sort.default"},
+                            "optimization_level": 1,
+                            "use_python_runtime": False,
+                            "device": self.device,
+                        },
+                    )
 
-            if compileable_backbone_and_neck_module is not None:
+            if (
+                compiled_backbone_and_neck_module is not None
+                and compileable_backbone_and_neck_module is not None
+            ):
                 setattr(
                     compileable_backbone_and_neck_module,
                     compileable_backbone_and_neck_module_method,
@@ -329,23 +374,40 @@ class PoseEstimator:
                 )
                 self.was_model_compiled = True
 
-            if compileable_head_module is not None:
+            if (
+                compiled_data_preprocessor_module is not None
+                and compileable_data_preprocessor_module is not None
+            ):
+                setattr(
+                    compileable_data_preprocessor_module,
+                    compileable_data_preprocessor_module_method,
+                    compiled_data_preprocessor_module,
+                )
+                self.was_model_compiled = True
+
+            if compiled_head_module is not None and compileable_head_module is not None:
                 setattr(
                     compileable_head_module,
                     compileable_head_module_method,
-                    compiled_head_model,
+                    compiled_head_module,
+                )
+                self.was_model_compiled = True
+
+            if compiled_dcc_module is not None and compileable_dcc_module is not None:
+                setattr(
+                    compileable_dcc_module,
+                    compileable_dcc_module_method,
+                    compiled_dcc_module,
                 )
                 self.was_model_compiled = True
 
     def _warmup_model(self):
-        logger.info(
-            f"Warming up pose estimator model (device: {self.device})"
-        )
+        logger.info(f"Warming up pose estimator model (device: {self.device})")
 
         with (
-                torch.cuda.amp.autocast()
-                if self.use_fp16 and not self.using_tensort
-                else nullcontext()
+            torch.cuda.amp.autocast()
+            if self.use_fp16 and not self.using_tensort
+            else nullcontext()
         ):
             inference_mode = None
             bboxes = None
@@ -374,10 +436,8 @@ class PoseEstimator:
                 meta=meta,
             )
 
-        logger.info(
-            f"Finished warming up pose estimator model (device: {self.device})"
-        )
-        
+        logger.info(f"Finished warming up pose estimator model (device: {self.device})")
+
     def inference(
         self,
         imgs: Union[list[np.ndarray], list[str]],
@@ -408,10 +468,12 @@ class PoseEstimator:
             init_default_scope(scope)
 
         # construct batch data samples
-        data_list = []
+        raw_data_for_pre_processing_list = []
         meta_mapping = []
+        pre_processed_data_list = []
         total_pre_processing_time = 0
 
+        s = time.time()
         for img_idx, img in enumerate(imgs):
             if inference_mode == "topdown":
                 img_bboxes = bboxes[img_idx]
@@ -441,60 +503,76 @@ class PoseEstimator:
                     meta_mapping.append(meta[img_idx])
 
                     if isinstance(img, str):
-                        data_info = {"img_path": img}
+                        data_for_pre_processing = {"img_path": img}
                     else:
-                        data_info = {"img": img}
-                    data_info["bbox"] = bbox[None, :4]  # shape (1, 4)
-                    data_info["bbox_score"] = bbox[None, 4]  # shape (1,)
+                        data_for_pre_processing = {"img": img}
+                    data_for_pre_processing["bbox"] = bbox[None, :4]  # shape (1, 4)
+                    data_for_pre_processing["bbox_score"] = bbox[None, 4]  # shape (1,)
+                    raw_data_for_pre_processing_list.append(data_for_pre_processing)
             else:
                 meta_item = {}
                 for key in meta.keys():
                     meta_item[key] = meta[key][img_idx]
 
                 meta_mapping.append(meta_item)
-                data_info = {"img": img}
-
-            data_info.update(self.dataset_meta)
-            s = time.time()
-            processed_pipeline_data = self.pipeline(data_info)
-            # processed_pipeline_data["inputs"] = processed_pipeline_data["inputs"]
-            total_pre_processing_time += time.time() - s
-
-            data_list.append(processed_pipeline_data)
-
-        s = time.time()
-        # Batch resizing consumes an outsized chunk of CUDA memory, so split this step across two passes
-        data_list = self.batch_bottomup_resize_transform.transform(
-            data_list=data_list,
-            device=self.device,
-        )
+                data_for_pre_processing = {"img": img}
+                raw_data_for_pre_processing_list.append(data_for_pre_processing)
         total_pre_processing_time += time.time() - s
-        # data_list_chunk_size = (len(data_list) // 2) + 1
-        # for ii in range(0, len(data_list), data_list_chunk_size):
-        #     data_list[ii : ii + data_list_chunk_size] = (
-        #         self.batch_bottomup_resize_transform.transform(
-        #             data_list=data_list[ii : ii + data_list_chunk_size],
-        #             device=self.device,
-        #         )
-        #     )
+
+        s_prep = time.time()
+        for idx, data_for_pre_processing in enumerate(raw_data_for_pre_processing_list):
+            data_for_pre_processing.update(self.dataset_meta)
+            processed_pipeline_data = self.pipeline(data_for_pre_processing)
+            processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
+            pre_processed_data_list.append(processed_pipeline_data)
+        total_pre_processing_time += time.time() - s_prep
+        logger.info(
+            f"Pose estimator data pipeline pre-processing prep performance (device: {self.device}): {len(pre_processed_data_list)} records {round(time.time() - s_prep, 3)} seconds"
+        )
+
+        if self.batch_bottomup_resize_transform is not None:
+            s_resize = time.time()
+            # Batch resizing consumes an outsized chunk of CUDA memory, so split this step across two passes
+            # data_list = self.batch_bottomup_resize_transform.transform(
+            #     data_list=data_list,
+            #     device=self.device,
+            # )
+            data_list_chunk_size = (len(pre_processed_data_list) // 2) + 1
+            for ii in range(0, len(pre_processed_data_list), data_list_chunk_size):
+                pre_processed_data_list[ii : ii + data_list_chunk_size] = (
+                    self.batch_bottomup_resize_transform.transform(
+                        data_list=pre_processed_data_list[
+                            ii : ii + data_list_chunk_size
+                        ],
+                        device=self.device,
+                    )
+                )
+            total_pre_processing_time += time.time() - s_resize
+            logger.info(
+                f"Pose estimator data pipeline pre-processing resize performance (device: {self.device}): {len(pre_processed_data_list)} records {round(time.time() - s_resize, 3)} seconds"
+            )
 
         if total_pre_processing_time == 0:
             records_per_second = "N/A"
         else:
-            records_per_second = round(len(data_list) / total_pre_processing_time, 2)
+            records_per_second = round(
+                len(pre_processed_data_list) / total_pre_processing_time, 2
+            )
 
         logger.info(
-            f"Pose estimator data pipeline pre-processing performance (device: {self.device}): {len(data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
+            f"Pose estimator data pipeline pre-processing overall performance (device: {self.device}): {len(pre_processed_data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
         )
 
         results = []
-        if len(data_list) > 0:
+        if len(pre_processed_data_list) > 0:
             # collate data list into a batch, which is a dict with following keys:
             # batch['inputs']: a list of input images
             # batch['data_samples']: a list of :obj:`PoseDataSample`
             batch_chunk_size = self.batch_size
-            for chunk_ii in range(0, len(data_list), batch_chunk_size):
-                sub_data_list = data_list[chunk_ii : chunk_ii + batch_chunk_size]
+            for chunk_ii in range(0, len(pre_processed_data_list), batch_chunk_size):
+                sub_data_list = pre_processed_data_list[
+                    chunk_ii : chunk_ii + batch_chunk_size
+                ]
 
                 logger.debug(
                     f"Running pose estimation against {len(sub_data_list)} data samples (device: {self.device})..."
@@ -522,8 +600,8 @@ class PoseEstimator:
 
                 batch["inputs"] = (
                     batch["inputs"]
-                    .to(memory_format=torch.channels_last)
                     .to(self.device)
+                    .to(memory_format=torch.channels_last)
                 )
 
                 s = time.time()
@@ -533,7 +611,7 @@ class PoseEstimator:
                         model_inputs, _ = self.task_processor.create_input(
                             imgs[0], input_shape
                         )
-                        # When trying to use TensorRT I get an invalid memory access error
+                        # When trying to use a modile pre-compiled to execute with TensorRT I get an invalid memory access error
 
                         # Look at context creation in mmdeploy/backend/tensort/wrapper.py, seems like the problem is somewhere in there
                         # Other ideas: there's a post here about running two tensorrt models at the same time: https://forums.developer.nvidia.com/t/can-i-inference-two-engine-simultaneous-on-jetson-using-tensorrt/64396/3
