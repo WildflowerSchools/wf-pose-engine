@@ -25,12 +25,13 @@ from mmpose.structures.bbox import bbox_xywh2xyxy
 import mmpose.models.heads.hybrid_heads.rtmo_head
 import mmpose.evaluation.functional
 import mmpose.evaluation.functional.nms
-from mmpose.evaluation.functional import nearby_joints_nms
+# from mmpose.evaluation.functional import nearby_joints_nms
 
 from PIL import Image
 
 from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader, RTMOImagesDataLoader, RTMOImagesDataset
 from pose_engine.log import logger
+from pose_engine.mmpose.misc import nearby_joints_nms
 from pose_engine.mmpose.transforms import BatchBottomupResize
 from pose_engine.torch import distributed_data_parallel as ddp
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
@@ -112,6 +113,7 @@ class PoseEstimatorPreProcessor:
             ``data_sample.pred_instances.keypoints`` and
             ``data_sample.pred_instances.keypoint_scores``.
         """
+        logger.info("PreProcessor::pre_process: start...")
         scope = self.model_config.get("default_scope", "mmpose")
         if scope is not None:
             init_default_scope(scope)
@@ -122,6 +124,7 @@ class PoseEstimatorPreProcessor:
         pre_processed_data_list = []
         total_pre_processing_time = 0
 
+        logger.info("PreProcessor::pre_process: prep...")
         for img_idx, img in enumerate(imgs):
             if inference_mode == "topdown":
                 img_bboxes = bboxes[img_idx]
@@ -166,6 +169,7 @@ class PoseEstimatorPreProcessor:
                 data_for_pre_processing = {"img": img}
                 raw_data_for_pre_processing_list.append(data_for_pre_processing)
 
+        logger.info("PreProcessor::pre_process: start pipeline processing...")
         for idx, data_for_pre_processing in enumerate(raw_data_for_pre_processing_list):
             data_for_pre_processing.update(self.dataset_meta)
             s = time.time()
@@ -174,13 +178,18 @@ class PoseEstimatorPreProcessor:
             total_pre_processing_time += time.time() - s
 
             pre_processed_data_list.append(processed_pipeline_data)
+        logger.info("PreProcessor::pre_process: finish pipeline processing...")
 
+        logger.info("PreProcessor::pre_process: start resize processing...")
         s = time.time()
         # if self.device == 'cpu':
+        list(map(lambda r: r["inputs"].pin_memory(), pre_processed_data_list))
+
         pre_processed_data_list = self.batch_bottomup_resize_transform.transform(
             data_list=pre_processed_data_list,
             device=self.device,
         )
+        logger.info("PreProcessor::pre_process: stop resize processing...")
         # else:
         #     # Batch resizing consumes an outsized chunk of CUDA memory, so split this step across two passes
         #     data_list_chunk_size = (len(pre_processed_data_list) // 2) + 1
@@ -196,7 +205,7 @@ class PoseEstimatorPreProcessor:
         if total_pre_processing_time == 0:
             records_per_second = "N/A"
         else:
-            records_per_second = round(len(pre_processed_data_list) / total_pre_processing_time, 2)
+            records_per_second = round(len(pre_processed_data_list) / total_pre_processing_time, 3)
 
         logger.info(
             f"Pre-processing pipeline performance (device: {self.device}): {len(pre_processed_data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
@@ -239,6 +248,8 @@ class PoseEstimatorPreProcessor:
                     f"Unknown dataloader ({type(loader)}) provided to PoseEstimator, accepted loaders are any of [BoundingBoxesDataLoader, VideoFramesDataLoader]"
                 )
 
+            logger.info(f"PreProcessor::loop: handle new batch of size {len(frames)}...")
+
             try:
                 logger.info(
                     f"Pre-processing pose estimation batch #{global_batch_idx} (device: {self.device}) - Includes {len(frames)} frames - Seconds since last batch {round(seconds_between_loops, 3)}"
@@ -258,15 +269,19 @@ class PoseEstimatorPreProcessor:
                         bboxes[img_idx] = bboxes[img_idx].numpy()
 
                 inference_mode = "topdown" if is_topdown else "onestage"
+                logger.info(f"PreProcessor::loop: starting pre_process...")
                 pre_processed_data_samples = self.pre_process(
                     inference_mode=inference_mode,
                     imgs=imgs,
                     bboxes=bboxes,
                     meta=meta,
                 )
+                logger.info(f"PreProcessor::loop: done pre_process")
 
+                logger.info(f"PreProcessor::loop: appending...")
                 start_prepare_results_for_yield_time = time.time()
                 self.rtmo_pre_processed_images_dataloader.dataset.add_data_object(pre_processed_data_samples)
+                logger.info(f"PreProcessor::loop: append/loop finished")
                 logger.info(
                     f"Pre-processing pose estimation batch #{global_batch_idx} yield time performance (device: {self.device}): {round(time.time() - start_prepare_results_for_yield_time, 3)} seconds"
                 )
@@ -795,6 +810,7 @@ class PoseEstimator:
                                     ],
                                     num_nearby_joints_thr=num_keypoints // 3,
                                 )
+                                
                                 pose_result.pred_instances = pose_result.pred_instances[
                                     prediction_indicies
                                 ]

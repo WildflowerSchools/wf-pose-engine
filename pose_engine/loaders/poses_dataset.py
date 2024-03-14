@@ -7,6 +7,8 @@ import torch
 import torch.multiprocessing as mp
 import torch.utils.data
 
+from faster_fifo import Queue as ffQueue
+
 from pose_engine.log import logger
 
 
@@ -26,10 +28,13 @@ class PosesDataset(torch.utils.data.IterableDataset):
 
         self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
 
-        if mp_manager is None:
-            mp_manager = mp.Manager()
+        # if mp_manager is None:
+        #     mp_manager = mp.Manager()
 
-        self.pose_queue = mp_manager.Queue(maxsize=pose_queue_maxsize)
+        # self.pose_queue = mp_manager.Queue(maxsize=pose_queue_maxsize)
+        self.pose_queue = ffQueue(
+            max_size_bytes=3 * 640 * 480 * pose_queue_maxsize
+        )
 
     def add_data_object(self, data_object):
         self.pose_queue.put(data_object)
