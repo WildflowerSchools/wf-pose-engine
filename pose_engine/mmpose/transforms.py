@@ -113,8 +113,7 @@ class BatchBottomupResize:
         imgs = (
             torch.stack(list(map(lambda r: r["inputs"], data_list)))
             .pin_memory()
-            .to(device)
-            .to(memory_format=torch.channels_last)
+            .to(device, memory_format=torch.channels_last, non_blocking=True)
         )
         logger.info(
             f"BottomupResize transform: time to move tensor to GPU: {round(time.time() - s, 3)}"

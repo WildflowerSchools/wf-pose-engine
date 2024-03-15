@@ -1,7 +1,8 @@
 from contextlib import nullcontext
-
-import time
+import pathlib
 from random import randrange
+import sys
+import time
 from typing import List, Optional, Union
 
 import numpy as np
@@ -12,6 +13,7 @@ import torch.utils.data
 
 import torch_tensorrt  # DO NOT DELETE
 
+import cv2
 from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
 from mmengine.dataset import Compose, default_collate
@@ -68,6 +70,8 @@ class PoseEstimator:
         self.dataset_meta = dataset_meta_from_config(
             self.model_config, dataset_mode="train"
         )
+
+        self.is_topdown = self.model_config["data_mode"] == "topdown"
 
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
@@ -291,7 +295,7 @@ class PoseEstimator:
                             compileable_backbone_and_neck_module_method,
                         ),
                         dynamic=False,
-                        mode="max-autotune-no-cudagraphs",
+                        mode="default",  # Must be "default" to compile on AWS V100 instances
                     )
 
                 if compileable_data_preprocessor_module is not None:
@@ -310,7 +314,7 @@ class PoseEstimator:
                             compileable_head_module, compileable_head_module_method
                         ),
                         dynamic=False,
-                        mode="max-autotune-no-cudagraphs",
+                        mode="default",  # Must be "default" to compile on AWS V100 instances
                     )
 
                 if compileable_dcc_module is not None:
@@ -320,7 +324,7 @@ class PoseEstimator:
                             compileable_dcc_module_method,
                         ),
                         dynamic=True,
-                        mode="max-autotune-no-cudagraphs",
+                        mode="default",  # Must be "default" to compile on AWS V100 instances
                     )
             elif self.compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
@@ -409,11 +413,25 @@ class PoseEstimator:
             if self.use_fp16 and not self.using_tensort
             else nullcontext()
         ):
+            example_image_path = str(
+                pathlib.Path(
+                    pathlib.Path(sys.modules["pose_engine"].__file__).parent,
+                    "assets/coco_image_example.jpg",
+                )
+            )
+            np_example_image = cv2.imread(example_image_path)
+            np_example_image = cv2.resize(np_example_image, (972, 1296))
+            imgs = list(
+                np.repeat(
+                    np_example_image[np.newaxis, :, :, :], self.batch_size, axis=0
+                )
+            )
+
             inference_mode = None
             bboxes = None
-            if self.model_config["data_mode"] == "topdown":
+            if self.is_topdown:
                 inference_mode = "topdown"
-                imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+                # imgs = list() # list(np.random.rand(self.batch_size, 972, 1296, 3))
 
                 bboxes = []
                 for _ in range(self.batch_size):
@@ -426,15 +444,18 @@ class PoseEstimator:
                 meta = list(map(lambda x: {"idx": x}, range(self.batch_size)))
             else:
                 inference_mode = "onestage"
-                imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+                # imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
                 meta = {"idx": list(map(lambda x: x, range(self.batch_size)))}
 
-            self.inference(
+            pose_results = self.inference(
                 inference_mode=inference_mode,
                 imgs=imgs,
                 bboxes=bboxes,
                 meta=meta,
             )
+
+            if not self.is_topdown:
+                self.apply_nearby_joints_nms(pose_results)
 
         logger.info(f"Finished warming up pose estimator model (device: {self.device})")
 
@@ -598,10 +619,8 @@ class PoseEstimator:
                     repeated_data_samples = [batch["data_samples"][-1]] * batch_fill
                     batch["data_samples"].extend(repeated_data_samples)
 
-                batch["inputs"] = (
-                    batch["inputs"]
-                    .to(self.device)
-                    .to(memory_format=torch.channels_last)
+                batch["inputs"] = batch["inputs"].to(
+                    self.device, memory_format=torch.channels_last, non_blocking=True
                 )
 
                 s = time.time()
@@ -651,6 +670,29 @@ class PoseEstimator:
 
         return results
 
+    def apply_nearby_joints_nms(self, pose_results):
+        for pose_result in pose_results:
+            if len(pose_result.pred_instances) == 0:
+                continue
+
+            pose_result_keypoints = pose_result.pred_instances.get("keypoints")
+            pose_result_scores = pose_result.pred_instances.get("bbox_scores")
+            num_keypoints = pose_result_keypoints.shape[-2]
+
+            prediction_indicies = nearby_joints_nms(
+                [
+                    {
+                        "keypoints": pose_result_keypoints[i],
+                        "score": pose_result_scores[i],
+                    }
+                    for i in range(len(pose_result_keypoints))
+                ],
+                num_nearby_joints_thr=num_keypoints // 3,
+            )
+            pose_result.pred_instances = pose_result.pred_instances[prediction_indicies]
+
+        return pose_results
+
     def iter_dataloader(self, loader: torch.utils.data.DataLoader):
         """Runs pose estimation against all items in the provided loader
 
@@ -659,8 +701,6 @@ class PoseEstimator:
         :returns: a generator of tuples (poses, meta)
         :rtype: generator
         """
-
-        is_topdown = False
 
         last_loop_start_time = None
         self._start_time.value = time.time()
@@ -683,7 +723,6 @@ class PoseEstimator:
                     self._first_inference_time.value = current_loop_time
 
             if isinstance(loader, BoundingBoxesDataLoader):
-                is_topdown = True
                 (bboxes, frames, meta) = data
             elif isinstance(loader, VideoFramesDataLoader):
                 bboxes = None
@@ -719,7 +758,7 @@ class PoseEstimator:
                     if self.use_fp16 and not self.using_tensort
                     else nullcontext()
                 ):
-                    inference_mode = "topdown" if is_topdown else "onestage"
+                    inference_mode = "topdown" if self.is_topdown else "onestage"
                     pose_results = self.inference(
                         inference_mode=inference_mode,
                         imgs=imgs,
@@ -727,47 +766,26 @@ class PoseEstimator:
                         meta=meta,
                     )
 
-                if is_topdown:
-                    for img_idx, img in enumerate(imgs):
-                        self._inference_count.value += len(bboxes[img_idx])
-                else:
-                    if pose_results and len(pose_results) > 0:
-                        s = time.time()
+                    if self.is_topdown:
+                        for img_idx, img in enumerate(imgs):
+                            self._inference_count.value += len(bboxes[img_idx])
+                    else:
+                        if pose_results and len(pose_results) > 0:
+                            s = time.time()
 
-                        for pose_result in pose_results:
-                            if len(pose_result.pred_instances) == 0:
-                                continue
+                            pose_results = self.apply_nearby_joints_nms(pose_results)
+                            for pose_result in pose_results:
+                                if len(pose_result.pred_instances) == 0:
+                                    continue
 
-                            pose_result_keypoints = pose_result.pred_instances.get(
-                                "keypoints"
+                                pose_result_bboxes = pose_result.pred_instances.get(
+                                    "bboxes"
+                                )
+                                self._inference_count.value += len(pose_result_bboxes)
+
+                            logger.info(
+                                f"Pose estimation batch #{global_batch_idx} nearby_joints_nms performance (device: {self.device}): {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
                             )
-                            pose_result_scores = pose_result.pred_instances.get(
-                                "bbox_scores"
-                            )
-                            num_keypoints = pose_result_keypoints.shape[-2]
-
-                            prediction_indicies = nearby_joints_nms(
-                                [
-                                    {
-                                        "keypoints": pose_result_keypoints[i],
-                                        "score": pose_result_scores[i],
-                                    }
-                                    for i in range(len(pose_result_keypoints))
-                                ],
-                                num_nearby_joints_thr=num_keypoints // 3,
-                            )
-                            pose_result.pred_instances = pose_result.pred_instances[
-                                prediction_indicies
-                            ]
-
-                            pose_result_bboxes = pose_result.pred_instances.get(
-                                "bboxes"
-                            )
-                            self._inference_count.value += len(pose_result_bboxes)
-
-                        logger.info(
-                            f"Pose estimation batch #{global_batch_idx} nearby_joints_nms performance (device: {self.device}): {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
-                        )
 
                 # data_samples = merge_data_samples(pose_results)
 
