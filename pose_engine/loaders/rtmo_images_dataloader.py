@@ -8,8 +8,8 @@ class RTMOImagesDataLoader(torch.utils.data.DataLoader):
         self.collate_fn = self._collate_fn
 
     def _collate_fn(self, data):
-        return data 
-    
+        return data
+
     # def move_to_device(self, batch):
     #     frames, meta = batch
 
@@ -24,7 +24,7 @@ class RTMOImagesDataLoader(torch.utils.data.DataLoader):
     #             meta_to_device[key] = value
 
     #     return frames.to(device=self.device), meta_to_device
-    
+
     def __iter__(self):
         for d in super().__iter__():
             # yield self.move_to_device(d)

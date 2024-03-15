@@ -27,11 +27,17 @@ from mmpose.structures.bbox import bbox_xywh2xyxy
 import mmpose.models.heads.hybrid_heads.rtmo_head
 import mmpose.evaluation.functional
 import mmpose.evaluation.functional.nms
+
 # from mmpose.evaluation.functional import nearby_joints_nms
 
 from PIL import Image
 
-from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader, RTMOImagesDataLoader, RTMOImagesDataset
+from pose_engine.loaders import (
+    VideoFramesDataLoader,
+    BoundingBoxesDataLoader,
+    RTMOImagesDataLoader,
+    RTMOImagesDataset,
+)
 from pose_engine.log import logger
 from pose_engine.mmpose.misc import nearby_joints_nms
 from pose_engine.mmpose.transforms import BatchBottomupResize
@@ -41,16 +47,18 @@ from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleData
 # Override the RTMO head's NMS algorithm with our custom NMS alorithm
 
 from pose_engine.mmpose.misc import nms_torch, nearby_joints_nms
+
 mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
 
 
 class PoseEstimatorPreProcessor:
     def __init__(
-            self,
-            model_config,
-            dataset_meta,
-            device: str = "cpu",
-            run_in_background: bool = False) -> None:
+        self,
+        model_config,
+        dataset_meta,
+        device: str = "cpu",
+        run_in_background: bool = False,
+    ) -> None:
         self.model_config = model_config
         self.dataset_meta = dataset_meta
         self.device = device
@@ -59,11 +67,10 @@ class PoseEstimatorPreProcessor:
         self.batch_bottomup_resize_transform = None
 
         self.rtmo_pre_processed_images_dataset = RTMOImagesDataset(
-            queue_maxsize=1000,
-            wait_for_images=True
+            queue_maxsize=2, wait_for_images=True
         )
         self.rtmo_pre_processed_images_dataloader = None
-        
+
         self._frame_count = mp.Value(
             "i", 0
         )  # Each frame contains multiple boxes, so we track frames separately from inferences
@@ -73,10 +80,8 @@ class PoseEstimatorPreProcessor:
     @property
     def frame_count(self) -> int:
         return self._frame_count.value
-    
-    def _init_pipeline(
-        self
-    ):
+
+    def _init_pipeline(self):
         self.pipeline = self.model_config.test_dataloader.dataset.pipeline
 
         # Modify the pipeline by slicing out the default BottomupResize method
@@ -177,7 +182,7 @@ class PoseEstimatorPreProcessor:
             data_for_pre_processing.update(self.dataset_meta)
             s = time.time()
             processed_pipeline_data = self.pipeline(data_for_pre_processing)
-            processed_pipeline_data['meta_mapping'] = meta_mapping[idx]
+            processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
             total_pre_processing_time += time.time() - s
 
             pre_processed_data_list.append(processed_pipeline_data)
@@ -213,17 +218,19 @@ class PoseEstimatorPreProcessor:
         if total_pre_processing_time == 0:
             records_per_second = "N/A"
         else:
-            records_per_second = round(len(pre_processed_data_list) / total_pre_processing_time, 3)
+            records_per_second = round(
+                len(pre_processed_data_list) / total_pre_processing_time, 3
+            )
 
         logger.info(
             f"Pre-processing pipeline performance (device: {self.device}): {len(pre_processed_data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
         )
 
         return pre_processed_data_list
-    
+
     def _preprocessing_process(self, loader):
         is_topdown = False
-        
+
         last_loop_start_time = None
         # self._start_time.value = time.time()
         for instance_batch_idx, data in enumerate(loader):
@@ -233,7 +240,7 @@ class PoseEstimatorPreProcessor:
                 seconds_between_loops = current_loop_time - last_loop_start_time
 
             global_batch_idx = instance_batch_idx
-            
+
             # with self._batch_count.get_lock():
             #     self._batch_count.value += 1
             #     global_batch_idx = instance_batch_idx
@@ -256,7 +263,9 @@ class PoseEstimatorPreProcessor:
                     f"Unknown dataloader ({type(loader)}) provided to PoseEstimator, accepted loaders are any of [BoundingBoxesDataLoader, VideoFramesDataLoader]"
                 )
 
-            logger.info(f"PreProcessor::loop: handle new batch of size {len(frames)}...")
+            logger.info(
+                f"PreProcessor::loop: handle new batch of size {len(frames)}..."
+            )
 
             try:
                 logger.info(
@@ -288,7 +297,9 @@ class PoseEstimatorPreProcessor:
 
                 logger.info(f"PreProcessor::loop: appending...")
                 start_prepare_results_for_yield_time = time.time()
-                self.rtmo_pre_processed_images_dataloader.dataset.add_data_object(pre_processed_data_samples)
+                self.rtmo_pre_processed_images_dataloader.dataset.add_data_object(
+                    pre_processed_data_samples
+                )
                 logger.info(f"PreProcessor::loop: append/loop finished")
                 logger.info(
                     f"Pre-processing pose estimation batch #{global_batch_idx} yield time performance (device: {self.device}): {round(time.time() - start_prepare_results_for_yield_time, 3)} seconds"
@@ -299,7 +310,7 @@ class PoseEstimatorPreProcessor:
                 del meta
 
             last_loop_start_time = current_loop_time
-        
+
         self.rtmo_pre_processed_images_dataloader.dataset.done_loading()
 
     def start_preprocessing_process(self, loader):
@@ -307,7 +318,7 @@ class PoseEstimatorPreProcessor:
             dataset=self.rtmo_pre_processed_images_dataset,
             num_workers=1,
             pin_memory=True,
-            batch_size=1
+            batch_size=1,
         )
 
         self.process = mp.Process(target=self._preprocessing_process, args=(loader,))
@@ -320,6 +331,7 @@ class PoseEstimatorPreProcessor:
             self.process.join()
             self.process.close()
             self.process = None
+
 
 class PoseEstimator:
     def __init__(
@@ -504,7 +516,11 @@ class PoseEstimator:
             )
 
     def _init_preprocessor(self):
-        self.pre_processor = PoseEstimatorPreProcessor(model_config=self.model_config, dataset_meta=self.dataset_meta, device=self.device)
+        self.pre_processor = PoseEstimatorPreProcessor(
+            model_config=self.model_config,
+            dataset_meta=self.dataset_meta,
+            device=self.device,
+        )
         # self.pre_processor.start_preprocessing_process(loader)
 
     def _init_pipeline(self):
@@ -713,7 +729,7 @@ class PoseEstimator:
                 )
             )
             np_example_image = cv2.imread(example_image_path)
-            np_example_image = cv2.resize(np_example_image, (972, 1296))
+            np_example_image = cv2.resize(np_example_image, (1296, 972))
             imgs = list(
                 np.repeat(
                     np_example_image[np.newaxis, :, :, :], self.batch_size, axis=0
@@ -740,17 +756,17 @@ class PoseEstimator:
                 # imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
                 meta = {"idx": list(map(lambda x: x, range(self.batch_size)))}
 
-            pose_data_samples = self.pre_processor.pre_process(
-                inference_mode=inference_mode,
-                imgs=imgs,
-                bboxes=bboxes,
-                meta=meta,
-            )
-            self.inference(data_list=pose_data_samples)
+            # Run 10 rounds of warmup
+            for _ in range(10):
+                pose_data_samples = self.pre_processor.pre_process(
+                    inference_mode=inference_mode,
+                    imgs=imgs,
+                    bboxes=bboxes,
+                    meta=meta,
+                )
+                self.inference(pre_processed_data_list=pose_data_samples)
 
-        logger.info(
-            f"Finished warming up pose estimator model (device: {self.device})"
-        )
+        logger.info(f"Finished warming up pose estimator model (device: {self.device})")
 
     def inference(self, pre_processed_data_list):
         results = []
@@ -797,7 +813,7 @@ class PoseEstimator:
                     if self.using_tensort:
                         input_shape = get_input_shape(self.deployment_config)
                         model_inputs, _ = self.task_processor.create_input(
-                            pre_processed_data_list[0]['inputs'], input_shape
+                            pre_processed_data_list[0]["inputs"], input_shape
                         )
                         # When trying to use a modile pre-compiled to execute with TensorRT I get an invalid memory access error
 
@@ -831,12 +847,15 @@ class PoseEstimator:
 
                     logger.info(
                         f"Pose estimator inference performance (device: {self.device}): {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
-                    )   
+                    )
                     results.extend(inference_results[0 : self.batch_size - batch_fill])
 
         # meta_mapping = data_list['meta_mapping']
         for res_idx, _result in enumerate(results):
-            _result.set_field(name="custom_metadata", value=pre_processed_data_list[res_idx]['meta_mapping'])
+            _result.set_field(
+                name="custom_metadata",
+                value=pre_processed_data_list[res_idx]["meta_mapping"],
+            )
 
         return results
 
@@ -876,7 +895,9 @@ class PoseEstimator:
         imgs = []
         bboxes = []
         last_loop_start_time = time.time()
-        for instance_batch_idx, data_samples_list_of_lists in enumerate(self.pre_processor.rtmo_pre_processed_images_dataloader):
+        for instance_batch_idx, pre_processed_data_list_of_lists in enumerate(
+            self.pre_processor.rtmo_pre_processed_images_dataloader
+        ):
             current_loop_time = time.time()
             seconds_between_loops = 0
             if last_loop_start_time is not None:
@@ -886,24 +907,26 @@ class PoseEstimator:
                 if self._first_inference_time.value == -1:
                     self._first_inference_time.value = current_loop_time
 
-            for data_samples_list in data_samples_list_of_lists:
+            for pre_processed_data_list in pre_processed_data_list_of_lists:
                 with self._batch_count.get_lock():
                     self._batch_count.value += 1
                     global_batch_idx = instance_batch_idx
-                
+
                 # with self._frame_count.get_lock():
                 #     self._frame_count.value += len(data_samples_list)
 
                 with self._time_waiting.get_lock():
                     self._time_waiting.value += seconds_between_loops
-                    
+
                 global_batch_idx = instance_batch_idx
                 with (
                     torch.cuda.amp.autocast()
                     if self.use_fp16 and not self.using_tensort
                     else nullcontext()
                 ):
-                    pose_results = self.inference(data_list=data_samples_list)
+                    pose_results = self.inference(
+                        pre_processed_data_list=pre_processed_data_list
+                    )
 
                     if self.is_topdown:
                         for img_idx, img in enumerate(imgs):
@@ -997,7 +1020,7 @@ class PoseEstimator:
                     )
 
                     logger.info(
-                        f"Completed pose estimation batch #{global_batch_idx} overall performance (device: {self.device}) - Includes {len(data_samples_list)} frames - {round(time.time() - current_loop_time, 2)} seconds - {round(len(data_samples_list) / (time.time() - current_loop_time), 2)} FPS"
+                        f"Completed pose estimation batch #{global_batch_idx} overall performance (device: {self.device}) - Includes {len(pre_processed_data_list)} frames - {round(time.time() - current_loop_time, 2)} seconds - {round(len(pre_processed_data_list) / (time.time() - current_loop_time), 2)} FPS"
                     )
 
             last_loop_start_time = time.time()
@@ -1009,5 +1032,5 @@ class PoseEstimator:
             self.pre_processor.stop()
 
     def __del__(self):
-        if hasattr(self, 'pose_estimator') and self.pose_estimator is not None:
+        if hasattr(self, "pose_estimator") and self.pose_estimator is not None:
             del self.pose_estimator

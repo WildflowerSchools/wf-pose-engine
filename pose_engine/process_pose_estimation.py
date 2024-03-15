@@ -275,7 +275,7 @@ class ProcessPoseEstimation:
                 run_distributed=self.run_distributed,
                 compile_engine=self.compile_engine,
             )
-            
+
             for pose_tuple in pose_estimator.iter_dataloader(loader=self.data_loader):
                 self.pose_estimation_instance_statuses[rank].frame_count = (
                     pose_estimator.frame_count

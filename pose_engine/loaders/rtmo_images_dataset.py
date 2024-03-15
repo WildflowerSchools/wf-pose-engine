@@ -1,5 +1,6 @@
 from ctypes import c_bool
 from multiprocessing import sharedctypes
+import multiprocessing.context
 import time
 from typing import Optional
 import queue
@@ -16,7 +17,7 @@ from pose_engine.log import logger
 class RTMOImagesDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
-        queue_maxsize: int = 120,
+        queue_maxsize: int = 2,
         wait_for_images: bool = True,
         mp_manager: Optional[mp.Manager] = None,
     ):
@@ -29,13 +30,11 @@ class RTMOImagesDataset(torch.utils.data.IterableDataset):
 
         self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
 
-        # if mp_manager is None:
-        #     mp_manager = mp.Manager()
+        if mp_manager is None:
+            mp_manager = mp.Manager()
 
-        # self.queue = mp_manager.Queue(maxsize=queue_maxsize)
-        self.queue = ffQueue(
-            max_size_bytes=3 * 640 * 480 * queue_maxsize
-        )
+        self.queue = mp_manager.Queue(maxsize=queue_maxsize)
+        # self.queue = ffQueue(max_size_bytes=3 * 640 * 480 * queue_maxsize)
 
     def add_data_object(self, pre_processed_data_samples):
         # move_to_numpy = True  # TODO: Figure out whey I can't share tensors across processes. Unless I move tensors to the CPU, I get the error "RuntimeError: Attempted to send CUDA tensor received from another process; this is not currently supported. Consider cloning before sending."
@@ -54,12 +53,15 @@ class RTMOImagesDataset(torch.utils.data.IterableDataset):
         #     self.queue.put(
         #         (bboxes.clone().share_memory_(), frame.clone().share_memory_(), meta)
         #     )
-        
+
+        # for sample in pre_processed_data_samples:
+        #     sample['inputs'] = sample['inputs'].detach().clone()
+
         s = time.time()
         for item in pre_processed_data_samples:
-            if item['inputs'].device.type == 'cuda':
-                item['inputs'] = item['inputs'].to("cpu")
-        
+            if item["inputs"].device.type == "cuda":
+                item["inputs"] = item["inputs"].to("cpu")
+
         self.queue.put(pre_processed_data_samples)
         # if isinstance(pre_processed_data_samples, list):
         #     for p in pre_processed_data_samples:
@@ -67,7 +69,9 @@ class RTMOImagesDataset(torch.utils.data.IterableDataset):
         # else:
         #     self.queue.put(pre_processed_data_samples)
 
-        logger.info(f"Added {len(pre_processed_data_samples)} items to pre-processed queue, seconds to add items: {round(time.time() - s, 2)} seconds")
+        logger.info(
+            f"Added {len(pre_processed_data_samples)} items to pre-processed queue, seconds to add items: {round(time.time() - s, 2)} seconds"
+        )
 
     @property
     def queue_wait_time(self):
