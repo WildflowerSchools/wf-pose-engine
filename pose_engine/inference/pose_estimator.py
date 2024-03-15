@@ -295,14 +295,15 @@ class PoseEstimatorPreProcessor:
                 )
                 logger.info(f"PreProcessor::loop: done pre_process")
 
-                logger.info(f"PreProcessor::loop: appending...")
-                start_prepare_results_for_yield_time = time.time()
+                start_add_items_to_queue = time.time()
                 self.rtmo_pre_processed_images_dataloader.dataset.add_data_object(
                     pre_processed_data_samples
                 )
-                logger.info(f"PreProcessor::loop: append/loop finished")
                 logger.info(
-                    f"Pre-processing pose estimation batch #{global_batch_idx} yield time performance (device: {self.device}): {round(time.time() - start_prepare_results_for_yield_time, 3)} seconds"
+                    f"Pre-processing pose estimation batch #{global_batch_idx} add to pre-process queue performance (device: {self.device}): {round(time.time() - start_add_items_to_queue, 3)} seconds"
+                )
+                logger.info(
+                    f"Pre-processing pose estimation batch #{global_batch_idx} overall performance (device: {self.device}) - Includes {len(frames)} frames: {round(time.time() - current_loop_time, 3)} seconds - {round(len(frames) / (time.time() - current_loop_time), 2)}"
                 )
             finally:
                 del bboxes
