@@ -1,3 +1,4 @@
+import time
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -8,6 +9,7 @@ import numpy as np
 from mmpose.utils.typing import PoseDataSample
 
 from pose_engine.log import logger
+
 
 class BatchBottomupResize:
     def __init__(
@@ -107,13 +109,17 @@ class BatchBottomupResize:
         if device is None:
             device = "cpu"
 
+        s = time.time()
         imgs = (
             torch.stack(list(map(lambda r: r["inputs"], data_list)))
-            .to(
-                memory_format=torch.channels_last
-            )  # Pytorch recommends using this option, but it doesn't appear to speed things up
-            .to(device)
+            .pin_memory()
+            .to(device, memory_format=torch.channels_last, non_blocking=True)
         )
+        logger.info(
+            f"BottomupResize transform: time to move tensor to GPU: {round(time.time() - s, 3)}"
+        )
+
+        s = time.time()
         single_data_sample: PoseDataSample = data_list[0]["data_samples"]
 
         img_h, img_w = single_data_sample.get("ori_shape")
@@ -139,11 +145,13 @@ class BatchBottomupResize:
                 dtype=np.float32,
             )
 
-            logger.info(f"BatchBottomupResize - resizing {len(imgs)} images...")
+            resize_start = time.time()
             imgs_for_input_sizes.append(
                 torchvision.transforms.Resize(padded_input_size)(imgs)
             )
-            logger.info(f"BatchBottomupResize - done resizing {len(imgs)} images")
+            logger.info(
+                f"BottomupResize transform: time to resize batch of size {len(imgs)}: {round(time.time() - resize_start, 3)}"
+            )
 
             if ii == 0:
                 # Store the transform information w.r.t. the main input size
@@ -171,4 +179,7 @@ class BatchBottomupResize:
                 data_list_item["inputs"] = imgs_for_input_sizes[0][ii]
                 data_list_item["data_samples"].set_metainfo(dict(aug_scale=None))
 
+        logger.info(
+            f"BottomupResize transform: time to prepare resized image: {round(time.time() - s, 3)}"
+        )
         return data_list

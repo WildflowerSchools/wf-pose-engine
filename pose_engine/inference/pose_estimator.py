@@ -1,7 +1,8 @@
 from contextlib import nullcontext
-
-import time
+import pathlib
 from random import randrange
+import sys
+import time
 from typing import List, Optional, Union
 
 import numpy as np
@@ -13,6 +14,7 @@ import torch.utils.data
 
 import torch_tensorrt  # DO NOT DELETE
 
+import cv2
 from mmdeploy.apis.utils import build_task_processor
 from mmdeploy.utils import get_input_shape, load_config
 from mmengine.dataset import Compose, default_collate
@@ -37,7 +39,8 @@ from pose_engine.torch import distributed_data_parallel as ddp
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
 
 # Override the RTMO head's NMS algorithm with our custom NMS alorithm
-from pose_engine.mmpose.misc import nms_torch
+
+from pose_engine.mmpose.misc import nms_torch, nearby_joints_nms
 mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
 
 
@@ -184,22 +187,27 @@ class PoseEstimatorPreProcessor:
         s = time.time()
         # if self.device == 'cpu':
         list(map(lambda r: r["inputs"].pin_memory(), pre_processed_data_list))
-
-        pre_processed_data_list = self.batch_bottomup_resize_transform.transform(
-            data_list=pre_processed_data_list,
-            device=self.device,
-        )
-        logger.info("PreProcessor::pre_process: stop resize processing...")
-        # else:
-        #     # Batch resizing consumes an outsized chunk of CUDA memory, so split this step across two passes
-        #     data_list_chunk_size = (len(pre_processed_data_list) // 2) + 1
-        #     for ii in range(0, len(pre_processed_data_list), data_list_chunk_size):
-        #         pre_processed_data_list[ii : ii + data_list_chunk_size] = (
-        #             self.batch_bottomup_resize_transform.transform(
-        #                 data_list=pre_processed_data_list[ii : ii + data_list_chunk_size],
-        #                 device=self.device,
-        #             )
-        #         )
+        if self.batch_bottomup_resize_transform is not None:
+            s_resize = time.time()
+            # Batch resizing consumes an outsized chunk of CUDA memory, so split this step across two passes
+            # data_list = self.batch_bottomup_resize_transform.transform(
+            #     data_list=data_list,
+            #     device=self.device,
+            # )
+            data_list_chunk_size = (len(pre_processed_data_list) // 2) + 1
+            for ii in range(0, len(pre_processed_data_list), data_list_chunk_size):
+                pre_processed_data_list[ii : ii + data_list_chunk_size] = (
+                    self.batch_bottomup_resize_transform.transform(
+                        data_list=pre_processed_data_list[
+                            ii : ii + data_list_chunk_size
+                        ],
+                        device=self.device,
+                    )
+                )
+            total_pre_processing_time += time.time() - s_resize
+            logger.info(
+                f"Pose estimator data pipeline pre-processing resize performance (device: {self.device}): {len(pre_processed_data_list)} records {round(time.time() - s_resize, 3)} seconds"
+            )
         total_pre_processing_time += time.time() - s
 
         if total_pre_processing_time == 0:
@@ -344,13 +352,15 @@ class PoseEstimator:
             self.model_config, dataset_mode="train"
         )
 
+        self.is_topdown = self.model_config["data_mode"] == "topdown"
+
         self.deployment_config_path = deployment_config_path
         self.deployment_config = None
         if self.deployment_config_path is None:
             self.deployment_config = None
         else:
             self.deployment_config = load_config(self.deployment_config_path)[0]
-        
+
         self.device = device
         self.batch_size = batch_size
         self.use_fp16 = use_fp16
@@ -451,9 +461,7 @@ class PoseEstimator:
     def time_waiting(self) -> int:
         return self._time_waiting.value
 
-    def _init_model(
-        self
-    ):
+    def _init_model(self):
         self.using_tensort = self.deployment_config_path is not None
         if not self.using_tensort:  # Standard PYTorch
             self.pose_estimator = init_pose_estimator(
@@ -499,14 +507,28 @@ class PoseEstimator:
         self.pre_processor = PoseEstimatorPreProcessor(model_config=self.model_config, dataset_meta=self.dataset_meta, device=self.device)
         # self.pre_processor.start_preprocessing_process(loader)
 
-    def _compile_model(
-        self
-    ):
+    def _init_pipeline(self):
+        self.pipeline = self.model_config.test_dataloader.dataset.pipeline
+
+        # Modify the pipeline by slicing out the default BottomupResize method
+        # BottomupResize does not batch process. Below, we substitute in a
+        # torchvision resize method that can take advantage of batching
+        modified_pipeline = []
+        for stage in self.pipeline:
+            if stage["type"] == "BottomupResize":
+                self.batch_bottomup_resize_transform = BatchBottomupResize(**stage)
+            else:
+                modified_pipeline.append(stage)
+
+        self.pipeline = Compose(modified_pipeline)
+
+    def _compile_model(self):
         if self.compile_engine is not None:
             logger.info(
                 f"Compiling pose estimator model (device: {self.device}) with '{self.compile_engine}' engine..."
             )
 
+            compiled_backbone_and_neck_module = None
             compileable_backbone_and_neck_module = None
             compileable_backbone_and_neck_module_method = "extract_feat"  # "forward"
             if self.run_parallel or self.run_distributed:
@@ -514,84 +536,134 @@ class PoseEstimator:
             else:
                 compileable_backbone_and_neck_module = self.pose_estimator
 
+            compiled_data_preprocessor_module = None
+            compileable_data_preprocessor_module = None
+            compileable_data_preprocessor_module_method = "forward"
+            if (
+                False
+            ):  # DISABLED INTENTIONALLY: No benefit, in fact this negatively impacts throughput
+                if self.run_parallel or self.run_distributed:
+                    compileable_data_preprocessor_module = (
+                        self.pose_estimator.module.data_preprocessor
+                    )
+                else:
+                    compileable_data_preprocessor_module = (
+                        self.pose_estimator.data_preprocessor
+                    )
+
             # Compile the model's head, compiling the full model causes way too many graph recompilations
+            compiled_head_module = None
             compileable_head_module = None
             compileable_head_module_method = "forward"
             if self.run_parallel or self.run_distributed:
                 compileable_head_module = self.pose_estimator.module.head
             else:
                 compileable_head_module = self.pose_estimator.head
-            # compileable_head_module = None
+
+            compiled_dcc_module = None
+            compileable_dcc_module = None
+            compileable_dcc_module_method = "forward_test"
+            if self.run_parallel or self.run_distributed:
+                compileable_dcc_module = self.pose_estimator.module.head.dcc
+            else:
+                compileable_dcc_module = self.pose_estimator.head.dcc
 
             if self.compile_engine == "inductor":
-                if self.compile_engine is not None and self.compile_engine == "inductor":
-                    mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = torch.compile(
-                        mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
-                        dynamic=True,
-                        # DO NOT ENABLE max-autotune mode, it enables triton.cudagraphs which leads to an Exception. Must set max_autotune in inductor options.
-                        #   ERROR: These live storage data ptrs are in the cudagraph pool but not accounted for as an output of cudagraph trees:
-                        # mode="max-autotune",
-                        options={
-                            "max_autotune": True,
-                            "triton.cudagraphs": False,  # This must be set to False
-                        },
+                if (
+                    self.compile_engine is not None
+                    and self.compile_engine == "inductor"
+                ):
+                    mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = (
+                        torch.compile(
+                            mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch,
+                            dynamic=True,
+                            mode="max-autotune-no-cudagraphs",
+                        )
                     )
 
-                compiled_backbone_and_neck_module = torch.compile(
-                    getattr(
-                        compileable_backbone_and_neck_module,
-                        compileable_backbone_and_neck_module_method,
-                    ),
-                    dynamic=False,
-                    mode="default",
-                )
+                if compileable_backbone_and_neck_module is not None:
+                    compiled_backbone_and_neck_module = torch.compile(
+                        getattr(
+                            compileable_backbone_and_neck_module,
+                            compileable_backbone_and_neck_module_method,
+                        ),
+                        dynamic=False,
+                        mode="default",  # Must be "default" to compile on AWS V100 instances
+                    )
+
+                if compileable_data_preprocessor_module is not None:
+                    compiled_data_preprocessor_module = torch.compile(
+                        getattr(
+                            compileable_data_preprocessor_module,
+                            compileable_data_preprocessor_module_method,
+                        ),
+                        dynamic=True,
+                        mode="max-autotune-no-cudagraphs",
+                    )
 
                 if compileable_head_module is not None:
-                    compiled_head_model = torch.compile(
+                    compiled_head_module = torch.compile(
                         getattr(
                             compileable_head_module, compileable_head_module_method
                         ),
                         dynamic=False,
-                        mode="default",
+                        mode="default",  # Must be "default" to compile on AWS V100 instances
+                    )
+
+                if compileable_dcc_module is not None:
+                    compiled_dcc_module = torch.compile(
+                        getattr(
+                            compileable_dcc_module,
+                            compileable_dcc_module_method,
+                        ),
+                        dynamic=True,
+                        mode="default",  # Must be "default" to compile on AWS V100 instances
                     )
             elif self.compile_engine == "tensorrt":
                 # Attempted to use torch_tensorrt backend on 2/14/2024, observed no speed up, retaining stub for future use/testing
-                compiled_backbone_and_neck_module = torch.compile(
-                    getattr(
-                        compileable_backbone_and_neck_module,
-                        compileable_backbone_and_neck_module_method,
-                    ),
-                    backend="torch_tensorrt",
-                    dynamic=False,
-                    options={
-                        "truncate_long_and_double": True,
-                        "precision": torch.half if self.use_fp16 else torch.float,
-                        # "debug": True,
-                        "min_block_size": 10,
-                        "torch_executed_ops": {"torch.ops.aten.sort.default"},
-                        "optimization_level": 1,
-                        "use_python_runtime": False,
-                        "device": self.device,
-                    },
-                )
+                if compileable_backbone_and_neck_module is not None:
+                    compiled_backbone_and_neck_module = torch.compile(
+                        getattr(
+                            compileable_backbone_and_neck_module,
+                            compileable_backbone_and_neck_module_method,
+                        ),
+                        backend="torch_tensorrt",
+                        dynamic=False,
+                        options={
+                            "truncate_long_and_double": True,
+                            "precision": torch.half if self.use_fp16 else torch.float,
+                            # "debug": True,
+                            "min_block_size": 10,
+                            "torch_executed_ops": {"torch.ops.aten.sort.default"},
+                            "optimization_level": 1,
+                            "use_python_runtime": False,
+                            "device": self.device,
+                        },
+                    )
 
-                compiled_head_model = torch.compile(
-                    getattr(compileable_head_module, compileable_head_module_method),
-                    backend="torch_tensorrt",
-                    dynamic=False,
-                    options={
-                        "truncate_long_and_double": True,
-                        "precision": torch.half if self.use_fp16 else torch.float,
-                        # "debug": True,
-                        "min_block_size": 10,
-                        "torch_executed_ops": {"torch.ops.aten.sort.default"},
-                        "optimization_level": 1,
-                        "use_python_runtime": False,
-                        "device": self.device,
-                    },
-                )
+                if compileable_head_module is not None:
+                    compiled_head_module = torch.compile(
+                        getattr(
+                            compileable_head_module, compileable_head_module_method
+                        ),
+                        backend="torch_tensorrt",
+                        dynamic=False,
+                        options={
+                            "truncate_long_and_double": True,
+                            "precision": torch.half if self.use_fp16 else torch.float,
+                            # "debug": True,
+                            "min_block_size": 10,
+                            "torch_executed_ops": {"torch.ops.aten.sort.default"},
+                            "optimization_level": 1,
+                            "use_python_runtime": False,
+                            "device": self.device,
+                        },
+                    )
 
-            if compileable_backbone_and_neck_module is not None:
+            if (
+                compiled_backbone_and_neck_module is not None
+                and compileable_backbone_and_neck_module is not None
+            ):
                 setattr(
                     compileable_backbone_and_neck_module,
                     compileable_backbone_and_neck_module_method,
@@ -599,29 +671,60 @@ class PoseEstimator:
                 )
                 self.was_model_compiled = True
 
-            if compileable_head_module is not None:
+            if (
+                compiled_data_preprocessor_module is not None
+                and compileable_data_preprocessor_module is not None
+            ):
+                setattr(
+                    compileable_data_preprocessor_module,
+                    compileable_data_preprocessor_module_method,
+                    compiled_data_preprocessor_module,
+                )
+                self.was_model_compiled = True
+
+            if compiled_head_module is not None and compileable_head_module is not None:
                 setattr(
                     compileable_head_module,
                     compileable_head_module_method,
-                    compiled_head_model,
+                    compiled_head_module,
+                )
+                self.was_model_compiled = True
+
+            if compiled_dcc_module is not None and compileable_dcc_module is not None:
+                setattr(
+                    compileable_dcc_module,
+                    compileable_dcc_module_method,
+                    compiled_dcc_module,
                 )
                 self.was_model_compiled = True
 
     def _warmup_model(self):
-        logger.info(
-            f"Warming up pose estimator model (device: {self.device})"
-        )
+        logger.info(f"Warming up pose estimator model (device: {self.device})")
 
         with (
-                torch.cuda.amp.autocast()
-                if self.use_fp16 and not self.using_tensort
-                else nullcontext()
+            torch.cuda.amp.autocast()
+            if self.use_fp16 and not self.using_tensort
+            else nullcontext()
         ):
+            example_image_path = str(
+                pathlib.Path(
+                    pathlib.Path(sys.modules["pose_engine"].__file__).parent,
+                    "assets/coco_image_example.jpg",
+                )
+            )
+            np_example_image = cv2.imread(example_image_path)
+            np_example_image = cv2.resize(np_example_image, (972, 1296))
+            imgs = list(
+                np.repeat(
+                    np_example_image[np.newaxis, :, :, :], self.batch_size, axis=0
+                )
+            )
+
             inference_mode = None
             bboxes = None
-            if self.model_config["data_mode"] == "topdown":
+            if self.is_topdown:
                 inference_mode = "topdown"
-                imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+                # imgs = list() # list(np.random.rand(self.batch_size, 972, 1296, 3))
 
                 bboxes = []
                 for _ in range(self.batch_size):
@@ -634,7 +737,7 @@ class PoseEstimator:
                 meta = list(map(lambda x: {"idx": x}, range(self.batch_size)))
             else:
                 inference_mode = "onestage"
-                imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
+                # imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
                 meta = {"idx": list(map(lambda x: x, range(self.batch_size)))}
 
             pose_data_samples = self.pre_processor.pre_process(
@@ -649,15 +752,17 @@ class PoseEstimator:
             f"Finished warming up pose estimator model (device: {self.device})"
         )
 
-    def inference(self, data_list):
+    def inference(self, pre_processed_data_list):
         results = []
-        if len(data_list) > 0:
+        if len(pre_processed_data_list) > 0:
             # collate data list into a batch, which is a dict with following keys:
             # batch['inputs']: a list of input images
             # batch['data_samples']: a list of :obj:`PoseDataSample`
             batch_chunk_size = self.batch_size
-            for chunk_ii in range(0, len(data_list), batch_chunk_size):
-                sub_data_list = data_list[chunk_ii : chunk_ii + batch_chunk_size]
+            for chunk_ii in range(0, len(pre_processed_data_list), batch_chunk_size):
+                sub_data_list = pre_processed_data_list[
+                    chunk_ii : chunk_ii + batch_chunk_size
+                ]
 
                 logger.debug(
                     f"Running pose estimation against {len(sub_data_list)} data samples (device: {self.device})..."
@@ -683,10 +788,8 @@ class PoseEstimator:
                     repeated_data_samples = [batch["data_samples"][-1]] * batch_fill
                     batch["data_samples"].extend(repeated_data_samples)
 
-                batch["inputs"] = (
-                    batch["inputs"]
-                    .to(memory_format=torch.channels_last)
-                    .to(self.device)
+                batch["inputs"] = batch["inputs"].to(
+                    self.device, memory_format=torch.channels_last, non_blocking=True
                 )
 
                 s = time.time()
@@ -694,9 +797,9 @@ class PoseEstimator:
                     if self.using_tensort:
                         input_shape = get_input_shape(self.deployment_config)
                         model_inputs, _ = self.task_processor.create_input(
-                            data_list[0]['inputs'], input_shape
+                            pre_processed_data_list[0]['inputs'], input_shape
                         )
-                        # When trying to use TensorRT I get an invalid memory access error
+                        # When trying to use a modile pre-compiled to execute with TensorRT I get an invalid memory access error
 
                         # Look at context creation in mmdeploy/backend/tensort/wrapper.py, seems like the problem is somewhere in there
                         # Other ideas: there's a post here about running two tensorrt models at the same time: https://forums.developer.nvidia.com/t/can-i-inference-two-engine-simultaneous-on-jetson-using-tensorrt/64396/3
@@ -733,9 +836,32 @@ class PoseEstimator:
 
         # meta_mapping = data_list['meta_mapping']
         for res_idx, _result in enumerate(results):
-            _result.set_field(name="custom_metadata", value=data_list[res_idx]['meta_mapping'])
+            _result.set_field(name="custom_metadata", value=pre_processed_data_list[res_idx]['meta_mapping'])
 
         return results
+
+    def apply_nearby_joints_nms(self, pose_results):
+        for pose_result in pose_results:
+            if len(pose_result.pred_instances) == 0:
+                continue
+
+            pose_result_keypoints = pose_result.pred_instances.get("keypoints")
+            pose_result_scores = pose_result.pred_instances.get("bbox_scores")
+            num_keypoints = pose_result_keypoints.shape[-2]
+
+            prediction_indicies = nearby_joints_nms(
+                [
+                    {
+                        "keypoints": pose_result_keypoints[i],
+                        "score": pose_result_scores[i],
+                    }
+                    for i in range(len(pose_result_keypoints))
+                ],
+                num_nearby_joints_thr=num_keypoints // 3,
+            )
+            pose_result.pred_instances = pose_result.pred_instances[prediction_indicies]
+
+        return pose_results
 
     def iter_dataloader(self, loader: torch.utils.data.DataLoader):
         """Runs pose estimation against all items in the provided loader
@@ -745,8 +871,6 @@ class PoseEstimator:
         :returns: a generator of tuples (poses, meta)
         :rtype: generator
         """
-        is_topdown = False
-
         self.pre_processor.start_preprocessing_process(loader=loader)
 
         imgs = []
@@ -781,111 +905,86 @@ class PoseEstimator:
                 ):
                     pose_results = self.inference(data_list=data_samples_list)
 
-                    if is_topdown:
+                    if self.is_topdown:
                         for img_idx, img in enumerate(imgs):
                             self._inference_count.value += len(bboxes[img_idx])
                     else:
                         if pose_results and len(pose_results) > 0:
                             s = time.time()
 
+                            pose_results = self.apply_nearby_joints_nms(pose_results)
                             for pose_result in pose_results:
                                 if len(pose_result.pred_instances) == 0:
                                     continue
 
-                                pose_result_keypoints = pose_result.pred_instances.get(
-                                    "keypoints"
-                                )
-                                pose_result_scores = pose_result.pred_instances.get(
-                                    "bbox_scores"
-                                )
-                                num_keypoints = pose_result_keypoints.shape[-2]
-
-                                prediction_indicies = nearby_joints_nms(
-                                    [
-                                        {
-                                            "keypoints": pose_result_keypoints[i],
-                                            "score": pose_result_scores[i],
-                                        }
-                                        for i in range(len(pose_result_keypoints))
-                                    ],
-                                    num_nearby_joints_thr=num_keypoints // 3,
-                                )
-                                
-                                pose_result.pred_instances = pose_result.pred_instances[
-                                    prediction_indicies
-                                ]
-
                                 pose_result_bboxes = pose_result.pred_instances.get(
                                     "bboxes"
                                 )
-                                with self._inference_count.get_lock():
-                                    self._inference_count.value += len(pose_result_bboxes)
+                                self._inference_count.value += len(pose_result_bboxes)
 
                             logger.info(
                                 f"Pose estimation batch #{global_batch_idx} nearby_joints_nms performance (device: {self.device}): {len(pose_results)} records {round(time.time() - s, 2)} seconds {round(len(pose_results) / (time.time() - s), 2)} records/second"
                             )
 
-                    # data_samples = merge_data_samples(pose_results)
+                poses_to_yield = []
+                # TODO: Optimize this method for extracting results and preparing them for the pose queue
+                start_prepare_results_for_yield_time = time.time()
+                if pose_results and len(pose_results) > 0:
+                    for _, pose_result in enumerate(pose_results):
+                        if pose_result is None or len(pose_result.pred_instances) == 0:
+                            continue
 
-                    poses_to_yield = []
-                    # TODO: Optimize this method for extracting results and preparing them for the pose queue
-                    start_prepare_results_for_yield_time = time.time()
-                    if pose_results and len(pose_results) > 0:
-                        for _, pose_result in enumerate(pose_results):
-                            if pose_result is None or len(pose_result.pred_instances) == 0:
-                                continue
-
-                            for pred_instance_idx in range(len(pose_result.pred_instances)):
-                                pose_result_keypoints = (
-                                    pose_result.pred_instances.keypoints[pred_instance_idx]
-                                )
-                                pose_result_keypoint_visible = (
-                                    pose_result.pred_instances.keypoints_visible[
-                                        pred_instance_idx
-                                    ]
-                                )
-                                pose_result_keypoint_scores = (
-                                    pose_result.pred_instances.keypoint_scores[
-                                        pred_instance_idx
-                                    ]
-                                )
-                                pose_result_bboxes = pose_result.pred_instances.bboxes[
+                        for pred_instance_idx in range(len(pose_result.pred_instances)):
+                            pose_result_keypoints = (
+                                pose_result.pred_instances.keypoints[pred_instance_idx]
+                            )
+                            pose_result_keypoint_visible = (
+                                pose_result.pred_instances.keypoints_visible[
                                     pred_instance_idx
                                 ]
-                                pose_result_bbox_scores = (
-                                    pose_result.pred_instances.bbox_scores[
-                                        pred_instance_idx
-                                    ]
-                                )
+                            )
+                            pose_result_keypoint_scores = (
+                                pose_result.pred_instances.keypoint_scores[
+                                    pred_instance_idx
+                                ]
+                            )
+                            pose_result_bboxes = pose_result.pred_instances.bboxes[
+                                pred_instance_idx
+                            ]
+                            pose_result_bbox_scores = (
+                                pose_result.pred_instances.bbox_scores[
+                                    pred_instance_idx
+                                ]
+                            )
 
-                                pose_result_metadata = pose_result.get("custom_metadata")
+                            pose_result_metadata = pose_result.get("custom_metadata")
 
-                                pose_prediction = np.concatenate(
-                                    (
-                                        pose_result_keypoints,  # 0, 1 = X, Y,
-                                        np.full_like(
-                                            np.expand_dims(
-                                                pose_result_keypoint_visible, axis=1
-                                            ),
-                                            -1,
-                                        ),  # 2 = visibility - mmPose doesn't produce actual visibility values, it simply duplicates scores. For now default the value to -1.
+                            pose_prediction = np.concatenate(
+                                (
+                                    pose_result_keypoints,  # 0, 1 = X, Y,
+                                    np.full_like(
                                         np.expand_dims(
-                                            pose_result_keypoint_scores, axis=1
-                                        ),  # 3 = confidence
-                                    ),
-                                    axis=1,
+                                            pose_result_keypoint_visible, axis=1
+                                        ),
+                                        -1,
+                                    ),  # 2 = visibility - mmPose doesn't produce actual visibility values, it simply duplicates scores. For now default the value to -1.
+                                    np.expand_dims(
+                                        pose_result_keypoint_scores, axis=1
+                                    ),  # 3 = confidence
+                                ),
+                                axis=1,
+                            )
+                            box_prediction = np.concatenate(
+                                (
+                                    pose_result_bboxes,  # 0, 1, 2, 3 = X1, Y1, X2, Y2
+                                    np.expand_dims(
+                                        pose_result_bbox_scores, axis=0
+                                    ),  # 5 = confidence
                                 )
-                                box_prediction = np.concatenate(
-                                    (
-                                        pose_result_bboxes,  # 0, 1, 2, 3 = X1, Y1, X2, Y2
-                                        np.expand_dims(
-                                            pose_result_bbox_scores, axis=0
-                                        ),  # 5 = confidence
-                                    )
-                                )
-                                poses_to_yield.append(
-                                    (pose_prediction, box_prediction, pose_result_metadata)
-                                )
+                            )
+                            poses_to_yield.append(
+                                (pose_prediction, box_prediction, pose_result_metadata)
+                            )
 
                     logger.info(
                         f"Pose estimation batch #{global_batch_idx} prepare results for yield time performance (device: {self.device}): {round(time.time() - start_prepare_results_for_yield_time, 2)} seconds"
