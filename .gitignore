@@ -44,5 +44,5 @@ checkpoints
 .docker.env
 slim.report.json
 
-mmdeploy
-mmdeploy_model
+/mmdeploy
+/mmdeploy_model
