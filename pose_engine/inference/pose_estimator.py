@@ -11,6 +11,8 @@ import torch._dynamo as torchdynamo
 import torch.multiprocessing as mp
 import torch.utils.data
 
+# import onnxconverter_common
+
 import torch_tensorrt  # DO NOT DELETE
 
 import cv2
@@ -19,6 +21,7 @@ from mmdeploy.utils import get_input_shape, load_config
 from mmengine.dataset import Compose, default_collate
 from mmengine.model.wrappers import MMDistributedDataParallel
 from mmengine.registry import init_default_scope
+from mmengine.runner import Runner
 from mmpose.apis import init_model as init_pose_estimator
 from mmpose.apis.inference import dataset_meta_from_config
 from mmpose.structures import PoseDataSample
@@ -31,11 +34,12 @@ import mmpose.evaluation.functional.nms
 
 from PIL import Image
 
-from pose_engine.mmpose.transforms import BatchBottomupResize
+from pose_engine.mmlab.mmpose.transforms import BatchBottomupResize
 from pose_engine.torch.mmlab_compatible_data_parallel import MMLabCompatibleDataParallel
 from pose_engine.loaders import VideoFramesDataLoader, BoundingBoxesDataLoader
 from pose_engine.log import logger
-from pose_engine.mmpose.misc import nms_torch, nearby_joints_nms
+from pose_engine.mmlab.mmpose.misc import nms_torch, nearby_joints_nms
+from pose_engine.util import is_valid_url
 
 mmpose.models.heads.hybrid_heads.rtmo_head.nms_torch = nms_torch
 
@@ -44,6 +48,7 @@ class PoseEstimator:
     def __init__(
         self,
         model_config_path: str = None,
+        model_runtime: str = "pytorch",
         checkpoint: str = None,
         deployment_config_path: str = None,
         device: str = "cuda:1",
@@ -63,6 +68,7 @@ class PoseEstimator:
                 "Pose estimator must be initialized by providing a config + checkpoint pair"
             )
 
+        self.model_runtime = model_runtime
         self.checkpoint = checkpoint
 
         self.model_config_path = model_config_path
@@ -173,8 +179,7 @@ class PoseEstimator:
         return self._time_waiting.value
 
     def _init_model(self):
-        self.using_tensort = self.deployment_config_path is not None
-        if not self.using_tensort:  # Standard PYTorch
+        if self.model_runtime == "pytorch":
             self.pose_estimator = init_pose_estimator(
                 config=self.model_config_path,
                 checkpoint=self.checkpoint,
@@ -204,15 +209,49 @@ class PoseEstimator:
                     f"Finished configuring pose estimator model for DDP on device {self.distributed_rank}"
                 )
 
-        else:  # TensorRT
+        else:  # TensorRT or ONNX
+            # from pose_engine.mmlab.mmdeploy.custom_ort_wrapper import CustomORTWrapper
+            # from mmdeploy.backend.base import BACKEND_WRAPPER
+            # register_module
+            # @BACKEND_MANAGERS.register('onnxruntime')
+
             self.task_processor = build_task_processor(
                 model_cfg=self.model_config,
                 deploy_cfg=self.deployment_config,
                 device=self.device,
             )
+
+            # from mmpose.registry import MODELS
+            # MODELS.build(self.model_config)
+
+            if is_valid_url(self.checkpoint):
+                if self.model_runtime == "onnx":
+                    file_type = "end2end.onnx"
+                else:
+                    file_type = "end2end.engine"
+                filename = (
+                    f"{pathlib.Path(self.model_config.filename).stem}.{file_type}"
+                )
+                # checkpoint_model_file = Runner.from_cfg(self.model_config).load_checkpoint(filename=self.checkpoint, map_location="cpu")
+                # checkpoint_model_file = load_checkpoint
+
+                from pose_engine.mmlab.mmengine import hub
+
+                # CheckpointLoader.load_checkpoint(filename=filename, map_location="cpu")
+                # loaded_checkpoint = load_from_http(filename=self.checkpoint, map_location="cpu")
+                checkpoint_path = hub.download_url(
+                    url=self.checkpoint, file_name=filename
+                )
+            else:
+                checkpoint_path = self.checkpoint
+
             self.pose_estimator = self.task_processor.build_backend_model(
-                [self.checkpoint]
+                [checkpoint_path]
             )
+
+            # if self.use_fp16 and self.model_runtime == "onnx":
+            #     logger.info("!!!!!!!!!!!CONVERTED ONNX TO FLOAT16!!!!!!!!!!!")
+            #     self.pose_estimator = onnxconverter_common.float16.convert_float_to_float16(self.pose_estimator)
 
     def _init_pipeline(self):
         self.pipeline = self.model_config.test_dataloader.dataset.pipeline
@@ -230,7 +269,7 @@ class PoseEstimator:
         self.pipeline = Compose(modified_pipeline)
 
     def _compile_model(self):
-        if self.compile_engine is not None:
+        if self.model_runtime == "pytorch" and self.compile_engine is not None:
             logger.info(
                 f"Compiling pose estimator model (device: {self.device}) with '{self.compile_engine}' engine..."
             )
@@ -410,7 +449,7 @@ class PoseEstimator:
 
         with (
             torch.cuda.amp.autocast()
-            if self.use_fp16 and not self.using_tensort
+            if self.use_fp16 and self.model_runtime == "pytorch"
             else nullcontext()
         ):
             example_image_path = str(
@@ -447,15 +486,16 @@ class PoseEstimator:
                 # imgs = list(np.random.rand(self.batch_size, 972, 1296, 3))
                 meta = {"idx": list(map(lambda x: x, range(self.batch_size)))}
 
-            pose_results = self.inference(
-                inference_mode=inference_mode,
-                imgs=imgs,
-                bboxes=bboxes,
-                meta=meta,
-            )
+            for _ in range(10):
+                pose_results = self.inference(
+                    inference_mode=inference_mode,
+                    imgs=imgs,
+                    bboxes=bboxes,
+                    meta=meta,
+                )
 
-            if not self.is_topdown:
-                self.apply_nearby_joints_nms(pose_results)
+                if not self.is_topdown:
+                    self.apply_nearby_joints_nms(pose_results)
 
         logger.info(f"Finished warming up pose estimator model (device: {self.device})")
 
@@ -625,11 +665,22 @@ class PoseEstimator:
 
                 s = time.time()
                 with torch.no_grad():
-                    if self.using_tensort:
-                        input_shape = get_input_shape(self.deployment_config)
-                        model_inputs, _ = self.task_processor.create_input(
-                            imgs[0], input_shape
-                        )
+                    if self.model_runtime == "pytorch":
+                        # s = time.time()
+                        # batch['inputs'] = list(map(lambda img_tensor: img_tensor.to(self.device), batch['inputs']))
+                        # logger.info(f"Pose estimator pre-processing, move image tensors to GPU timing: {round(time.time() - s, 2)}")
+
+                        if self.was_model_compiled:
+                            torch.compiler.cudagraph_mark_step_begin()
+
+                        # for idx, _ in enumerate(batch['inputs']):
+                        #     batch['inputs'][idx] = batch['inputs'][idx].to(memory_format=torch.channels_last)
+                        inference_results = self.pose_estimator.test_step(batch)
+                    else:
+                        # input_shape = get_input_shape(self.deployment_config)
+                        # model_inputs, _ = self.task_processor.create_input(
+                        #     batch, input_shape
+                        # )
                         # When trying to use a modile pre-compiled to execute with TensorRT I get an invalid memory access error
 
                         # Look at context creation in mmdeploy/backend/tensort/wrapper.py, seems like the problem is somewhere in there
@@ -647,19 +698,7 @@ class PoseEstimator:
                         #
                         # As of 1/12/2024, the problem is when running the model of GPU device 1! Running the detector on device 1 causes the same issue.
                         # I might need to set CUDA_VISIBLE_DEVICES on each process that's running the respective model: https://github.com/NVIDIA/TensorRT/issues/322
-                        inference_results = self.pose_estimator.test_step(model_inputs)
-                    else:
-                        # s = time.time()
-                        # batch['inputs'] = list(map(lambda img_tensor: img_tensor.to(self.device), batch['inputs']))
-                        # logger.info(f"Pose estimator pre-processing, move image tensors to GPU timing: {round(time.time() - s, 2)}")
-
-                        if self.was_model_compiled:
-                            torch.compiler.cudagraph_mark_step_begin()
-
-                        # for idx, _ in enumerate(batch['inputs']):
-                        #     batch['inputs'][idx] = batch['inputs'][idx].to(memory_format=torch.channels_last)
                         inference_results = self.pose_estimator.test_step(batch)
-
                     logger.info(
                         f"Pose estimator inference performance (device: {self.device}): {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
                     )
@@ -755,7 +794,7 @@ class PoseEstimator:
 
                 with (
                     torch.cuda.amp.autocast()
-                    if self.use_fp16 and not self.using_tensort
+                    if self.use_fp16 and self.model_runtime == "pytorch"
                     else nullcontext()
                 ):
                     inference_mode = "topdown" if self.is_topdown else "onestage"
@@ -801,16 +840,23 @@ class PoseEstimator:
                             pose_result_keypoints = (
                                 pose_result.pred_instances.keypoints[pred_instance_idx]
                             )
-                            pose_result_keypoint_visible = (
-                                pose_result.pred_instances.keypoints_visible[
-                                    pred_instance_idx
-                                ]
-                            )
                             pose_result_keypoint_scores = (
                                 pose_result.pred_instances.keypoint_scores[
                                     pred_instance_idx
                                 ]
                             )
+
+                            if hasattr(pose_result, "keypoints_visible"):
+                                pose_result_keypoint_visible = (
+                                    pose_result.pred_instances.keypoints_visible[
+                                        pred_instance_idx
+                                    ]
+                                )
+                            else:
+                                pose_result_keypoint_visible = (
+                                    pose_result_keypoint_scores
+                                )
+
                             pose_result_bboxes = pose_result.pred_instances.bboxes[
                                 pred_instance_idx
                             ]
@@ -819,6 +865,23 @@ class PoseEstimator:
                                     pred_instance_idx
                                 ]
                             )
+
+                            if isinstance(pose_result_keypoints, torch.Tensor):
+                                pose_result_keypoints = pose_result_keypoints.to("cpu")
+                            if isinstance(pose_result_keypoint_scores, torch.Tensor):
+                                pose_result_keypoint_scores = (
+                                    pose_result_keypoint_scores.to("cpu")
+                                )
+                            if isinstance(pose_result_keypoint_visible, torch.Tensor):
+                                pose_result_keypoint_visible = (
+                                    pose_result_keypoint_visible.to("cpu")
+                                )
+                            if isinstance(pose_result_bboxes, torch.Tensor):
+                                pose_result_bboxes = pose_result_bboxes.to("cpu")
+                            if isinstance(pose_result_bbox_scores, torch.Tensor):
+                                pose_result_bbox_scores = pose_result_bbox_scores.to(
+                                    "cpu"
+                                )
 
                             pose_result_metadata = pose_result.get("custom_metadata")
 

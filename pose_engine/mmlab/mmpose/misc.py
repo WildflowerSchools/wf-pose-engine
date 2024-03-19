@@ -182,9 +182,9 @@ def nearby_joints_nms(
         return []
 
     if score_per_joint:
-        scores = np.array([k["score"].mean() for k in kpts_db])
+        scores = torch.stack([k["score"].mean() for k in kpts_db]).to("cpu").numpy()
     else:
-        scores = np.array([k["score"] for k in kpts_db])
+        scores = torch.stack([k["score"] for k in kpts_db]).to("cpu").numpy()
 
     kpts = np.array([k["keypoints"] for k in kpts_db])
 

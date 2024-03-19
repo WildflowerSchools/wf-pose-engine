@@ -268,6 +268,7 @@ class ProcessPoseEstimation:
                 model_config_path=self.pose_estimator_model.model_config,
                 checkpoint=self.pose_estimator_model.checkpoint,
                 deployment_config_path=self.pose_estimator_model.deployment_config,
+                model_runtime=self.pose_estimator_model.model_runtime.value,
                 device=pose_estimator_device,
                 batch_size=self.batch_size,
                 use_fp16=self.use_fp16,

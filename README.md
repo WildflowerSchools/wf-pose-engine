@@ -147,3 +147,40 @@ npx migrate-mongo create pose_2d_collection
 ```
 
 The `url` attribute was updated to: **process.env.MONGO_POSE_URI,** and the first migration file was filled in to create the **poses_2d** collection
+
+## Compile model for ONNX or TensorRT
+
+
+```
+git clone -b main https://github.com/open-mmlab/mmdeploy.git
+
+wget https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth -P checkpoints/
+```
+
+### Compile RTMO to ONNX + FP16
+```
+python mmdeploy/tools/deploy.py \
+    configs/runtimes/mmdeploy/configs/mmpose/pose-detection_rtmo_onnxruntime_dynamic-fp16.py \
+    configs/body_2d_keypoint/rtmo/body7/rtmo-l_16xb16-600e_body7-640x640.py \
+    checkpoints/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth \
+    pose_engine/assets/coco_image_example.jpg \
+    --work-dir mmdeploy_model/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211-fp16 \
+    --device cuda \
+    --dump-info
+```
+
+### Compile RTMO to TensorRT + FP16
+> Note, tensorrt models must be compiled for each GPU version being targeted (note the GPU_DEVICE_NAME env var)
+```
+export GPU_DEVICE_NAME="rtx2080"
+python mmdeploy/tools/deploy.py \
+    configs/runtimes/mmdeploy/configs/mmpose/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640.py \
+    configs/body_2d_keypoint/rtmo/body7/rtmo-l_16xb16-600e_body7-640x640.py \
+    checkpoints/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth \
+    pose_engine/assets/coco_image_example.jpg \
+    --work-dir mmdeploy_model/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640-${GPU_DEVICE_NAME} \
+    --device cuda \
+    --dump-info
+```
+
+| Once the model is converted, the folder `mmdeploy_model/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211-fp16` can be staged on S3 for deployment

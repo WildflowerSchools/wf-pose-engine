@@ -10,7 +10,11 @@ from . import config
 from .honeycomb_service import HoneycombCachingClient
 from .known_inference_models import DetectorModel, PoseModel
 from .log import logger
+
+# from .mmlab import load_mmlab_customizations
 from .pipeline import Pipeline
+
+# load_mmlab_customizations()
 
 
 def _run(
@@ -64,7 +68,10 @@ def run(
     elif inference_mode == "onestage":
         run_distributed = True
         detector_model = None
-        pose_model = PoseModel.rtmo_large()
+        pose_model = PoseModel.rtmo_large_tensorrt_fp16()
+        # pose_model = PoseModel.rtmo_large_onnx_fp16()
+        # pose_model = PoseModel.rtmo_large_onnx()
+        # pose_model = PoseModel.rtmo_large()
     else:
         raise ValueError(
             f"Expected inference mode to be 'onestage' or 'topdown', not '{inference_mode}'"

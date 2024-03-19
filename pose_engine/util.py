@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from dateutil.parser import parse as datetime_parse
 
@@ -14,3 +15,11 @@ def str_to_date(date_str):
             pass
 
     return datetime_parse(date_str).replace(tzinfo=timezone.utc)
+
+
+def is_valid_url(url):
+    try:
+        u = urlparse(url)
+        return u.scheme != ""
+    except ValueError:
+        return False
