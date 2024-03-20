@@ -15,14 +15,14 @@ onnx_config = dict(
     })
 
 backend_config = dict(
-    common_config=dict(max_workspace_size=1 << 34),
+    common_config=dict(max_workspace_size=1 << 35),
     model_inputs=[
         dict(
             input_shapes=dict(
                 input=dict(
-                    min_shape=[128, 3, 640, 640],
-                    opt_shape=[128, 3, 640, 640],
-                    max_shape=[128, 3, 640, 640])))
+                    min_shape=[288, 3, 640, 640],
+                    opt_shape=[288, 3, 640, 640],
+                    max_shape=[288, 3, 640, 640])))
     ])
 
 codebase_config = dict(
