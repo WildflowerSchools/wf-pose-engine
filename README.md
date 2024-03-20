@@ -150,10 +150,9 @@ The `url` attribute was updated to: **process.env.MONGO_POSE_URI,** and the firs
 
 ## Compile model for ONNX or TensorRT
 
-
+### Fetch mmDeploy for building model
 ```
 git clone -b main https://github.com/open-mmlab/mmdeploy.git
-
 wget https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth -P checkpoints/
 ```
 
@@ -174,7 +173,7 @@ python mmdeploy/tools/deploy.py \
 ```
 export GPU_DEVICE_NAME="v100"
 python mmdeploy/tools/deploy.py \
-    configs/runtimes/mmdeploy/configs/mmpose/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640.py \
+    configs/runtimes/mmdeploy/configs/mmpose/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640_v100.py \
     configs/body_2d_keypoint/rtmo/body7/rtmo-l_16xb16-600e_body7-640x640.py \
     checkpoints/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth \
     pose_engine/assets/coco_image_example.jpg \
@@ -184,6 +183,8 @@ python mmdeploy/tools/deploy.py \
 ```
 
 ### Compile RTMO to TensorRT + INT8
+
+#### Prework
 ```
 apt install cuda-toolkit-11-8
 wget -c http://images.cocodataset.org/annotations/annotations_trainval2017.zip
@@ -203,6 +204,19 @@ export CPATH=/usr/local/cuda-12.3/include
 export PATH=/app/.venv/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/lib64
 export LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/lib64
 export LIBRARY_PATH=/usr/local/cuda-12.3/lib64
+```
+
+#### Compile
+> As of 3/20/2024, this does NOT work. I believe it's because of a memory size limitation, but not entirely sure.
+```
+python mmdeploy/tools/deploy.py  \
+    configs/runtimes/mmdeploy/configs/mmpose/pose-detection_rtmo_tensorrt-int8_dynamic-640x640.py \
+    configs/body_2d_keypoint/rtmo/body7/rtmo-l_16xb16-600e_body7-640x640.py \
+    checkpoints/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth  \
+    pose_engine/assets/coco_image_example.jpg \
+    --work-dir mmdeploy_model/pose-detection_rtmo_tensorrt-int8_dynamic-640x640-${GPU_DEVICE_NAME} \
+    --device cuda \
+    --dump-info
 ```
 
 | Once the model is converted, the folder `mmdeploy_model/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211-fp16` can be staged on S3 for deployment
