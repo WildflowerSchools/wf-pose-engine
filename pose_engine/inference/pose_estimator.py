@@ -1,3 +1,4 @@
+import concurrent.futures
 from contextlib import nullcontext
 import pathlib
 from random import randrange
@@ -261,7 +262,7 @@ class PoseEstimator:
         # torchvision resize method that can take advantage of batching
         modified_pipeline = []
         for stage in self.pipeline:
-            if stage["type"] == "BottomupResize":
+            if False and stage["type"] == "BottomupResize":
                 self.batch_bottomup_resize_transform = BatchBottomupResize(**stage)
             else:
                 modified_pipeline.append(stage)
@@ -580,12 +581,35 @@ class PoseEstimator:
                 raw_data_for_pre_processing_list.append(data_for_pre_processing)
         total_pre_processing_time += time.time() - s
 
+        # data, _ = self.task_processor.create_input(
+        #     imgs,
+        #     get_input_shape(self.deployment_config),
+        #     data_preprocessor=getattr(self.pose_estimator, 'data_preprocessor', None)
+        # )
+
         s_prep = time.time()
-        for idx, data_for_pre_processing in enumerate(raw_data_for_pre_processing_list):
-            data_for_pre_processing.update(self.dataset_meta)
-            processed_pipeline_data = self.pipeline(data_for_pre_processing)
-            processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
-            pre_processed_data_list.append(processed_pipeline_data)
+
+        futures = []
+        n_threads = 8
+        # raw_data_list_chunk_size = (len(raw_data_for_pre_processing_list) // n_threads) + 1
+        with concurrent.futures.ThreadPoolExecutor(n_threads) as executor:
+            # for ii in range(0, len(raw_data_for_pre_processing_list), raw_data_list_chunk_size):
+            for idx, data_for_pre_processing in enumerate(raw_data_for_pre_processing_list):
+                # chunk = raw_data_for_pre_processing_list[
+                #     ii : ii + raw_data_list_chunk_size
+                # ]
+                futures.append(executor.submit( self.pipeline, data_for_pre_processing))
+
+            for future in concurrent.futures.as_completed( futures ):
+                processed_pipeline_data = future.result()
+                processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
+                pre_processed_data_list.append(processed_pipeline_data)
+
+        # for idx, data_for_pre_processing in enumerate(raw_data_for_pre_processing_list):
+            # data_for_pre_processing.update(self.dataset_meta)
+            # processed_pipeline_data = self.pipeline(data_for_pre_processing)
+            # processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
+            # pre_processed_data_list.append(processed_pipeline_data)
         total_pre_processing_time += time.time() - s_prep
         logger.info(
             f"Pose estimator data pipeline pre-processing prep performance (device: {self.device}): {len(pre_processed_data_list)} records {round(time.time() - s_prep, 3)} seconds"
@@ -598,14 +622,20 @@ class PoseEstimator:
             #     data_list=data_list,
             #     device=self.device,
             # )
-            data_list_chunk_size = (len(pre_processed_data_list) // 2) + 1
+            resize_device = 'cpu' #self.device,
+
+            if resize_device ==  'cpu':
+                data_list_chunk_size = len(pre_processed_data_list)
+            else:
+                data_list_chunk_size = (len(pre_processed_data_list) // 2) + 1
+
             for ii in range(0, len(pre_processed_data_list), data_list_chunk_size):
                 pre_processed_data_list[ii : ii + data_list_chunk_size] = (
                     self.batch_bottomup_resize_transform.transform(
                         data_list=pre_processed_data_list[
                             ii : ii + data_list_chunk_size
                         ],
-                        device=self.device,
+                        device=resize_device
                     )
                 )
             total_pre_processing_time += time.time() - s_resize
@@ -836,6 +866,25 @@ class PoseEstimator:
                         if pose_result is None or len(pose_result.pred_instances) == 0:
                             continue
 
+                        if isinstance(pose_result.pred_instances.keypoints, torch.Tensor):
+                            pose_result.pred_instances.keypoints = pose_result.pred_instances.keypoints.detach().to("cpu")
+                        if isinstance(pose_result.pred_instances.keypoint_scores, torch.Tensor):
+                            pose_result.pred_instances.keypoint_scores = (
+                                pose_result.pred_instances.keypoint_scores.detach().to("cpu")
+                            )
+                        if hasattr(pose_result.pred_instances, "keypoints_visible"):
+                            if isinstance(pose_result.pred_instances.keypoints_visible, torch.Tensor):
+                                pose_result.pred_instances.keypoints_visible = (
+                                    pose_result.pred_instances.keypoints_visible.detach().to("cpu")
+                                )
+                            
+                        if isinstance(pose_result.pred_instances.bboxes, torch.Tensor):
+                            pose_result.pred_instances.bboxes = pose_result.pred_instances.bboxes.detach().to("cpu")
+                        if isinstance(pose_result.pred_instances.bbox_scores, torch.Tensor):
+                            pose_result.pred_instances.bbox_scores = pose_result.pred_instances.bbox_scores.detach().to(
+                                "cpu"
+                            )
+                            
                         for pred_instance_idx in range(len(pose_result.pred_instances)):
                             pose_result_keypoints = (
                                 pose_result.pred_instances.keypoints[pred_instance_idx]
@@ -865,23 +914,6 @@ class PoseEstimator:
                                     pred_instance_idx
                                 ]
                             )
-
-                            if isinstance(pose_result_keypoints, torch.Tensor):
-                                pose_result_keypoints = pose_result_keypoints.to("cpu")
-                            if isinstance(pose_result_keypoint_scores, torch.Tensor):
-                                pose_result_keypoint_scores = (
-                                    pose_result_keypoint_scores.to("cpu")
-                                )
-                            if isinstance(pose_result_keypoint_visible, torch.Tensor):
-                                pose_result_keypoint_visible = (
-                                    pose_result_keypoint_visible.to("cpu")
-                                )
-                            if isinstance(pose_result_bboxes, torch.Tensor):
-                                pose_result_bboxes = pose_result_bboxes.to("cpu")
-                            if isinstance(pose_result_bbox_scores, torch.Tensor):
-                                pose_result_bbox_scores = pose_result_bbox_scores.to(
-                                    "cpu"
-                                )
 
                             pose_result_metadata = pose_result.get("custom_metadata")
 

@@ -172,7 +172,7 @@ python mmdeploy/tools/deploy.py \
 ### Compile RTMO to TensorRT + FP16
 > Note, tensorrt models must be compiled for each GPU version being targeted (note the GPU_DEVICE_NAME env var)
 ```
-export GPU_DEVICE_NAME="rtx2080"
+export GPU_DEVICE_NAME="v100"
 python mmdeploy/tools/deploy.py \
     configs/runtimes/mmdeploy/configs/mmpose/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640.py \
     configs/body_2d_keypoint/rtmo/body7/rtmo-l_16xb16-600e_body7-640x640.py \
@@ -181,6 +181,28 @@ python mmdeploy/tools/deploy.py \
     --work-dir mmdeploy_model/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640-${GPU_DEVICE_NAME} \
     --device cuda \
     --dump-info
+```
+
+### Compile RTMO to TensorRT + INT8
+```
+apt install cuda-toolkit-11-8
+wget -c http://images.cocodataset.org/annotations/annotations_trainval2017.zip
+send to data/coco/annoations/
+
+wget http://images.cocodataset.org/zips/val2017.zip
+send to data/coco/val2017
+wget http://images.cocodataset.org/zips/train2017.zip
+send to data/coco/train2017
+
+pip install h5py
+export CPATH=$CPATH:/usr/local/cuda-11/include/:/usr/local/cuda/include:/usr/local/cuda-11/include/
+pip install pycuda
+
+apt install cuda-toolkit-12-3
+export CPATH=/usr/local/cuda-12.3/include
+export PATH=/app/.venv/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/lib64
+export LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/lib64
+export LIBRARY_PATH=/usr/local/cuda-12.3/lib64
 ```
 
 | Once the model is converted, the folder `mmdeploy_model/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211-fp16` can be staged on S3 for deployment
