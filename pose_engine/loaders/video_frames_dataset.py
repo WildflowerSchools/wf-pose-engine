@@ -47,8 +47,8 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         for v in video_objects:
             self.video_object_queue.put(v)
 
-        if mp_manager is None:
-            mp_manager = mp.Manager()
+        # if mp_manager is None:
+        #     mp_manager = mp.Manager()
 
         self.video_frame_queue = ffQueue(
             max_size_bytes=3 * 640 * 480 * frame_queue_maxsize
@@ -308,6 +308,8 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 if frame is not None:
                     yield (frame, meta)
             except queue.Empty:
+                # logger.info("Video frames queue empty")
+
                 end_wait = time.time() - start_wait
                 with self._queue_wait_time.get_lock():
                     self._queue_wait_time.value += end_wait

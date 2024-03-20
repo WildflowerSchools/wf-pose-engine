@@ -37,6 +37,7 @@ class VideoFramesDataLoader(torch.utils.data.DataLoader):
             # for d in self.dataset.__iter__():
             logger.info(f"Video frame dataloader is yielding {len(d[0])} frames")
             yield self.move_to_device(d)
+            logger.info(f"Video frame dataloader is done yielding {len(d[0])} frames")
 
         logger.debug("Video frame dataloader is done iterating")
 

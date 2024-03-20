@@ -312,6 +312,7 @@ class ProcessPoseEstimation:
             raise e
         finally:
             if pose_estimator is not None:
+                pose_estimator.stop_pre_processor()
                 del pose_estimator
 
             if self.run_distributed and rank is not None:
