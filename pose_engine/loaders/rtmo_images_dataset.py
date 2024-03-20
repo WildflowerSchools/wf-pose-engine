@@ -17,7 +17,7 @@ from pose_engine.log import logger
 class RTMOImagesDataset(torch.utils.data.IterableDataset):
     def __init__(
         self,
-        queue_maxsize: int = 2,
+        queue_maxsize: int = 10,
         wait_for_images: bool = True,
         mp_manager: Optional[mp.Manager] = None,
     ):
