@@ -156,6 +156,23 @@ git clone -b main https://github.com/open-mmlab/mmdeploy.git
 wget https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth -P checkpoints/
 ```
 
+###
+```
+# ln -s libcublas.so.12 /usr/local/cuda-12.3/lib64/libcublas.so.11
+# ln -s libcublasLt.so.12 /usr/local/cuda-12.3/lib64/libcublasLt.so.11
+# ln -s libcudart.so.11.0 /usr/local/cuda-12.3/lib64/libcudart.so.11
+# ln -s libcudart.so.12 /usr/local/cuda-12.3/lib64/libcudart.so.11.0
+
+ln -s libcublasLt.so.11 /app/.venv/lib/python3.11/site-packages/nvidia/cublas/lib/libcublasLt.so.11.0
+
+pip install nvidia-cublas-cu11
+pip install nvidia-cuda-runtime-cu11
+pip install nvidia-cuda-nvrtc-cu11
+
+export PATH=${PATH}:/usr/local/cuda-12.3/lib64
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/cuda-12.3/lib64:/app/.venv/lib/python3.11/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib/
+```
+
 ### Compile RTMO to ONNX + FP16
 ```
 python mmdeploy/tools/deploy.py \
@@ -188,7 +205,7 @@ python mmdeploy/tools/deploy.py \
 ```
 apt install cuda-toolkit-11-8
 wget -c http://images.cocodataset.org/annotations/annotations_trainval2017.zip
-send to data/coco/annoations/
+send to data/coco/annotations/
 
 wget http://images.cocodataset.org/zips/val2017.zip
 send to data/coco/val2017
