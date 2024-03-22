@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, UTC
 import time
 from typing import Optional
 import uuid
@@ -9,6 +9,7 @@ import torch.multiprocessing as mp
 import honeycomb_io
 from pose_db_io.handle.models import pose_2d
 
+from .config import Settings
 from .known_inference_models import DetectorModel, PoseModel
 from . import loaders
 from .process_detection import ProcessDetection
@@ -147,11 +148,12 @@ class Pipeline:
 
         self.video_frames_loader = loaders.VideoFramesDataLoader(
             dataset=self.video_frame_dataset,
-            device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
+            # device="cpu",  # This should be "cuda:0", but need to wait until image pre-processing doesn't require moving frames back to CPU
             shuffle=False,
-            num_workers=2,
+            num_workers=Settings().VIDEO_FRAME_LOADER_PROCESSES,
             batch_size=video_frame_dataloader_batch_size,
-            pin_memory=True,
+            pin_memory=False,
+            persistent_workers=False,
         )
 
         self.bbox_dataset = loaders.BoundingBoxesDataset(
@@ -162,7 +164,7 @@ class Pipeline:
             shuffle=False,
             num_workers=0,
             batch_size=bouding_box_dataloader_batch_size,
-            pin_memory=True,
+            pin_memory=False,
         )
 
         self.poses_dataset = loaders.PosesDataset(
@@ -249,7 +251,7 @@ class Pipeline:
 
         common_metadata = pose_2d.Pose2dMetadataCommon(
             inference_run_id=uuid.uuid4(),
-            inference_run_created_at=datetime.utcnow(),
+            inference_run_created_at=datetime.now(UTC),
             environment_id=self.environment_id,
             classroom_date=self.start_datetime.astimezone(
                 self.environment_timezone

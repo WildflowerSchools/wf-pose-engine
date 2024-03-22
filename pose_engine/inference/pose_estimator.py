@@ -77,6 +77,7 @@ class PoseEstimatorPreProcessor:
         self.queue = mp_manager.Queue(maxsize=queue_maxsize)
         # self.queue = ffQueue(max_size_bytes=3 * 640 * 640 * queue_maxsize)
 
+        self.process = None
         self.stop_event: mp.Event = mp.Event()
 
         self._queue_wait_time: sharedctypes.Synchronized = mp.Value("d", 0)
@@ -196,23 +197,29 @@ class PoseEstimatorPreProcessor:
 
         s_prep = time.time()
 
-        futures = []
-        n_threads = 4
-        # raw_data_list_chunk_size = (len(raw_data_for_pre_processing_list) // n_threads) + 1
-        with concurrent.futures.ThreadPoolExecutor(n_threads) as executor:
-            # for ii in range(0, len(raw_data_for_pre_processing_list), raw_data_list_chunk_size):
-            for idx, data_for_pre_processing in enumerate(
-                raw_data_for_pre_processing_list
-            ):
-                # chunk = raw_data_for_pre_processing_list[
-                #     ii : ii + raw_data_list_chunk_size
-                # ]
-                futures.append(executor.submit(self.pipeline, data_for_pre_processing))
+        # futures = []
+        # n_threads = 1
+        # # raw_data_list_chunk_size = (len(raw_data_for_pre_processing_list) // n_threads) + 1
+        # with concurrent.futures.ThreadPoolExecutor(n_threads) as executor:
+        #     # for ii in range(0, len(raw_data_for_pre_processing_list), raw_data_list_chunk_size):
+        #     for idx, data_for_pre_processing in enumerate(
+        #         raw_data_for_pre_processing_list
+        #     ):
+        #         # chunk = raw_data_for_pre_processing_list[
+        #         #     ii : ii + raw_data_list_chunk_size
+        #         # ]
+        #         futures.append(executor.submit(self.pipeline, data_for_pre_processing))
 
-            for future in concurrent.futures.as_completed(futures):
-                processed_pipeline_data = future.result()
-                processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
-                pre_processed_data_list.append(processed_pipeline_data)
+        #     for future in concurrent.futures.as_completed(futures):
+        #         processed_pipeline_data = future.result()
+        #         processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
+        #         pre_processed_data_list.append(processed_pipeline_data)
+
+        for idx, data_for_pre_processing in enumerate(raw_data_for_pre_processing_list):
+            processed_pipeline_data = self.pipeline(data_for_pre_processing)
+            processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
+            pre_processed_data_list.append(processed_pipeline_data)
+
         total_pre_processing_time += time.time() - s_prep
         logger.info("PreProcessor::pre_process: finish pipeline processing...")
 
@@ -260,7 +267,7 @@ class PoseEstimatorPreProcessor:
 
         return pre_processed_data_list
 
-    def _preprocessing_process(self, rank=None, loader=None):
+    def _preprocessing_process(self, process_index: int, loader=None):
         is_topdown = False
 
         last_loop_start_time = None
@@ -320,39 +327,45 @@ class PoseEstimatorPreProcessor:
                 inference_mode = "topdown" if is_topdown else "onestage"
                 logger.info(f"PreProcessor::loop: starting pre_process...")
 
-                pre_processed_data_samples = []
-                futures = []
-                n_threads = 4
-                chunk_size = (len(imgs) // n_threads) + 1
-                with concurrent.futures.ThreadPoolExecutor(n_threads) as executor:
-                    for ii in range(0, len(imgs), chunk_size):
-                        imgs_chunk = imgs[ii : ii + chunk_size]
-                        bboxes_chunk = None
-                        if bboxes is not None:
-                            bboxes_chunk = bboxes[ii : ii + chunk_size]
-                        futures.append(
-                            executor.submit(
-                                self.pre_process,
-                                **dict(
-                                    inference_mode=inference_mode,
-                                    imgs=imgs_chunk,
-                                    bboxes=bboxes_chunk,
-                                    meta=meta,
-                                ),
-                            )
-                        )
+                pre_processed_data_samples = self.pre_process(
+                    inference_mode=inference_mode,
+                    imgs=imgs,
+                    bboxes=bboxes,
+                    meta=meta,
+                )
+                # pre_processed_data_samples = []
+                # futures = []
+                # n_threads = 2
+                # chunk_size = (len(imgs) // n_threads) + 1
+                # with concurrent.futures.ThreadPoolExecutor(n_threads) as executor:
+                #     for ii in range(0, len(imgs), chunk_size):
+                #         imgs_chunk = imgs[ii : ii + chunk_size]
+                #         bboxes_chunk = None
+                #         if bboxes is not None:
+                #             bboxes_chunk = bboxes[ii : ii + chunk_size]
+                #         futures.append(
+                #             executor.submit(
+                #                 self.pre_process,
+                #                 **dict(
+                #                     inference_mode=inference_mode,
+                #                     imgs=imgs_chunk,
+                #                     bboxes=bboxes_chunk,
+                #                     meta=meta,
+                #                 ),
+                #             )
+                #         )
 
-                    for future in concurrent.futures.as_completed(futures):
-                        pre_processed_data_samples.extend(future.result())
-                        # processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
-                        # pre_processed_data_list.append(processed_pipeline_data)
+                #     for future in concurrent.futures.as_completed(futures):
+                #         pre_processed_data_samples.extend(future.result())
+                # processed_pipeline_data["meta_mapping"] = meta_mapping[idx]
+                # pre_processed_data_list.append(processed_pipeline_data)
 
-                        # pre_processed_data_samples = self.pre_process(
-                        #     inference_mode=inference_mode,
-                        #     imgs=imgs,
-                        #     bboxes=bboxes,
-                        #     meta=meta,
-                        # )
+                # pre_processed_data_samples = self.pre_process(
+                #     inference_mode=inference_mode,
+                #     imgs=imgs,
+                #     bboxes=bboxes,
+                #     meta=meta,
+                # )
                 logger.info(f"PreProcessor::loop: done pre_process")
 
                 start_add_items_to_queue = time.time()
@@ -393,22 +406,27 @@ class PoseEstimatorPreProcessor:
         #     pin_memory=True,
         #     batch_size=1,
         # )
+        if self.process is not None:
+            return
+
         self.stop_event.clear()
 
-        # self.process = mp.Process(target=self._preprocessing_process, args=(loader,))
-        # self.process.start()
-        num_processes = mp.multiprocessing.cpu_count()
-        if num_processes > 1:
-            num_processes -= 1
-        elif num_processes > 4:
-            num_processes = 4
+        n_processes = mp.multiprocessing.cpu_count()
+        if n_processes > 1:
+            n_processes -= 1
+        if n_processes > 2:
+            n_processes = 2
 
-        num_processes = 1
+        n_processes = 1
+        # for _ in range(n_processes):
+        #     process = mp.Process(target=self._preprocessing_process, args=(loader,), daemon=False)
+        #     self.processes.append(process)
+        #     process.start()
 
         self.process: mp.ProcessContext = mp.spawn(
             self._preprocessing_process,
             args=(loader,),
-            nprocs=num_processes,
+            nprocs=n_processes,
             daemon=False,
             join=False,
         )
@@ -418,10 +436,17 @@ class PoseEstimatorPreProcessor:
         # if self.rtmo_pre_processed_images_dataloader.dataset is not None:
         #     self.rtmo_pre_processed_images_dataloader.dataset.cleanup()
 
-        if self.process is not None:
-            self.process.join()
-            # self.process.close()
-            self.process = None
+        # if len(self.processes) > 0:
+        #     for p in self.processes:
+        #         p.join()
+        #         if isinstance(p, mp.Process):
+        #             p.close()
+        #         # self.process = None
+        #     self.processes = []
+        self.process.join()
+        if isinstance(self.process, mp.Process):
+            self.process.close()
+        self.process = None
 
 
 class PoseEstimator:
@@ -892,21 +917,28 @@ class PoseEstimator:
             # batch['data_samples']: a list of :obj:`PoseDataSample`
             batch_chunk_size = self.batch_size
             for chunk_ii in range(0, len(pre_processed_data_list), batch_chunk_size):
+                s = time.time()
                 sub_data_list = pre_processed_data_list[
                     chunk_ii : chunk_ii + batch_chunk_size
                 ]
 
-                logger.debug(
-                    f"Running pose estimation against {len(sub_data_list)} data samples (device: {self.device})..."
+                logger.info(
+                    f"Pose inference - Running pose estimation against {len(sub_data_list)} data samples (device: {self.device})..."
                 )
 
                 batch = default_collate(sub_data_list)  # pseudo_collate(sub_data_list)
+
+                # batch = torch.utils.data.default_collate(list(map(lambda l: {'inputs': l['inputs'], 'meta_mapping': l['meta_mapping']}, sub_data_list)))
+                # batch['data_samples'] = list(map(lambda l: l['data_samples'], sub_data_list))
 
                 # Make sure the batch size is consistent. If any items are missing, duplicate the last item in the batch to fill up the batch.
                 # We do this because torch.compile freaks out if it seems a different batch size. It triggers a graph recompilation that kills
                 # the application silently. No idea why that happens.
                 batch_fill = self.batch_size - len(sub_data_list)
                 if batch_fill > 0:
+                    logger.info(
+                        f"Pose inference - Batch not full, filling with redundant {batch_fill} frames"
+                    )
                     # Extend the img inputs
                     repeated_input = (
                         batch["inputs"][-1].unsqueeze(0).repeat(batch_fill, 1, 1, 1)
@@ -919,9 +951,16 @@ class PoseEstimator:
                     # Extend the data_samples list
                     repeated_data_samples = [batch["data_samples"][-1]] * batch_fill
                     batch["data_samples"].extend(repeated_data_samples)
+                logger.info(
+                    f"Pose inference - Preparing batch for GPU: {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
+                )
 
+                s = time.time()
                 batch["inputs"] = batch["inputs"].to(
                     self.device, memory_format=torch.channels_last, non_blocking=True
+                )
+                logger.info(
+                    f"Pose inference - Sending batch to GPU: {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
                 )
 
                 s = time.time()
@@ -967,7 +1006,7 @@ class PoseEstimator:
                         # I might need to set CUDA_VISIBLE_DEVICES on each process that's running the respective model: https://github.com/NVIDIA/TensorRT/issues/322
                         inference_results = self.pose_estimator.test_step(batch)
                     logger.info(
-                        f"Pose estimator inference performance (device: {self.device}): {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
+                        f"Pose inference - Pose estimator inference performance (device: {self.device}): {len(sub_data_list)} records {round(time.time() - s, 2)} seconds {round(len(sub_data_list) / (time.time() - s), 2)} records/second"
                     )
                     pose_results.extend(
                         inference_results[0 : self.batch_size - batch_fill]
@@ -1068,6 +1107,7 @@ class PoseEstimator:
             if last_loop_start_time is not None:
                 seconds_between_loops = current_loop_time - last_loop_start_time
 
+            navigating_locks_time = time.time()
             with self._first_inference_time.get_lock():
                 if self._first_inference_time.value == -1:
                     self._first_inference_time.value = current_loop_time
@@ -1088,6 +1128,12 @@ class PoseEstimator:
                 self._time_waiting.value += seconds_between_loops
 
             global_batch_idx = instance_batch_idx
+
+            logger.info(
+                f"Pose estimation batch #{global_batch_idx} navigating locks performance (device: {self.device}): {round(time.time() - navigating_locks_time, 2)} seconds"
+            )
+
+            actual_inference_time = time.time()
             with (
                 torch.cuda.amp.autocast()
                 if self.use_fp16 and self.model_runtime == "pytorch"
@@ -1095,6 +1141,9 @@ class PoseEstimator:
             ):
                 pose_results = self.inference(
                     pre_processed_data_list=pre_processed_data_list
+                )
+                logger.info(
+                    f"Pose estimation batch #{global_batch_idx} actual inference performance (device: {self.device}): {round(time.time() - actual_inference_time, 2)} seconds"
                 )
 
                 if self.is_topdown:

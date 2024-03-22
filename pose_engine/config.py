@@ -27,3 +27,5 @@ class Settings(pydantic_settings.BaseSettings):
     )
 
     STORE_POSES: bool = False
+
+    VIDEO_FRAME_LOADER_PROCESSES: Optional[int] = 2

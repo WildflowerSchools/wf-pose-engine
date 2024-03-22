@@ -152,25 +152,22 @@ The `url` attribute was updated to: **process.env.MONGO_POSE_URI,** and the firs
 
 ### Fetch mmDeploy for building model
 ```
+apt update
+apt install -y git vim wget
 git clone -b main https://github.com/open-mmlab/mmdeploy.git
 wget https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth -P checkpoints/
 ```
 
-###
+### Prepare docker instance for mmDeploy build
 ```
-# ln -s libcublas.so.12 /usr/local/cuda-12.3/lib64/libcublas.so.11
-# ln -s libcublasLt.so.12 /usr/local/cuda-12.3/lib64/libcublasLt.so.11
-# ln -s libcudart.so.11.0 /usr/local/cuda-12.3/lib64/libcudart.so.11
-# ln -s libcudart.so.12 /usr/local/cuda-12.3/lib64/libcudart.so.11.0
-
-ln -s libcublasLt.so.11 /app/.venv/lib/python3.11/site-packages/nvidia/cublas/lib/libcublasLt.so.11.0
-
 pip install nvidia-cublas-cu11
 pip install nvidia-cuda-runtime-cu11
 pip install nvidia-cuda-nvrtc-cu11
 
 export PATH=${PATH}:/usr/local/cuda-12.3/lib64
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/cuda-12.3/lib64:/app/.venv/lib/python3.11/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib/
+
+ln -s libcublasLt.so.11 /app/.venv/lib/python3.11/site-packages/nvidia/cublas/lib/libcublasLt.so.11.0
 ```
 
 ### Compile RTMO to ONNX + FP16

@@ -20,9 +20,10 @@ backend_config = dict(
         dict(
             input_shapes=dict(
                 input=dict(
-                    min_shape=[288, 3, 640, 640],
-                    opt_shape=[288, 3, 640, 640],
-                    max_shape=[288, 3, 640, 640])))
+                    # 320 is the max batch size before running into Tensor size limits: "The volume of a tensor cannot exceed 2^31-1"
+                    min_shape=[320, 3, 640, 640],
+                    opt_shape=[320, 3, 640, 640],
+                    max_shape=[320, 3, 640, 640])))
     ])
 
 codebase_config = dict(

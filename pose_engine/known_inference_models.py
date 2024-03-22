@@ -252,7 +252,17 @@ class PoseModel(InferenceModel):
         elif torch.cuda.get_device_name(0) == "Tesla V100-SXM2-16GB":
             checkpoint = "./mmdeploy_model/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640-rtx2080/end2end.engine"
             checkpoint_enum = (
-                pose_2d.PoseModelCheckpointEnum.rtmo_l_16xb16_600e_body7_640x640_b37118ce_20231211_tensorrt_fp16_rtx2080
+                pose_2d.PoseModelCheckpointEnum.rtmo_l_16xb16_600e_body7_640x640_b37118ce_20231211_tensorrt_fp16_v100
+            )
+        elif torch.cuda.get_device_name(0) == "NVIDIA A10G":
+            checkpoint = "https://wildflower-tech-model-zoo.s3.us-east-2.amazonaws.com/mmlab/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640-a10g/end2end.engine"
+            checkpoint_enum = (
+                pose_2d.PoseModelCheckpointEnum.rtmo_l_16xb16_600e_body7_640x640_b37118ce_20231211_tensorrt_fp16_a10g
+            )
+        elif torch.cuda.get_device_name(0) == "Tesla T4":
+            checkpoint = "https://wildflower-tech-model-zoo.s3.us-east-2.amazonaws.com/mmlab/pose-detection_rtmo_tensorrt-fp16_dynamic-640x640-t40/end2end.engine"
+            checkpoint_enum = (
+                pose_2d.PoseModelCheckpointEnum.rtmo_l_16xb16_600e_body7_640x640_b37118ce_20231211_tensorrt_fp16_t4
             )
         else:
             raise ValueError(
