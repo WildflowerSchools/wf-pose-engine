@@ -2,6 +2,25 @@
 
 Generate and store 2D poses
 
+## Performance
+
+> Note, performance is degraded because we prepare video -> frames during execution of pose_engine. If we bypassed that step and took strain off the CPU/GPU, we'd see ~10-20% improved FPS.
+
+> Also note, the following uses the POSE_ENGINE_VIDEO_USE_CUDACODEC_WITH_CUDA=true option to move video->frame processing to the GPU
+
+* AWS g5.2xlarge (A10G)
+    * Dense: 128.36 FPS
+    * Sparse: 152.09 FPS
+* AWS g5.4xlarge (A10G)
+    * Dense: 144.21 FPS
+    * Sparse: 173.37 FPS
+* AWS p3.2xlarge (V100)
+    * Dense: 94.51 FPS (CPU bound due to video -> frame processing)
+    * Sparse: 98.73 FPS
+
+_"sparse frames" =  ~1 person per frame_
+_"dense frames" =  ~16 people per frame_
+
 ## Run Pose Generation
 
 ```
@@ -169,18 +188,6 @@ apt update
 apt install -y git vim wget
 git clone -b main https://github.com/open-mmlab/mmdeploy.git
 wget https://download.openmmlab.com/mmpose/v1/projects/rtmo/rtmo-l_16xb16-600e_body7-640x640-b37118ce_20231211.pth -P checkpoints/
-```
-
-### Prepare docker instance for mmDeploy build
-```
-pip install nvidia-cublas-cu11
-pip install nvidia-cuda-runtime-cu11
-pip install nvidia-cuda-nvrtc-cu11
-
-export PATH=${PATH}:/usr/local/cuda-12.3/lib64
-export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/cuda-12.3/lib64:/app/.venv/lib/python3.11/site-packages/nvidia/cublas/lib:/app/.venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib/
-
-ln -s libcublasLt.so.11 /app/.venv/lib/python3.11/site-packages/nvidia/cublas/lib/libcublasLt.so.11.0
 ```
 
 ### Compile RTMO to ONNX + FP16

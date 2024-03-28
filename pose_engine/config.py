@@ -30,10 +30,11 @@ class Settings(pydantic_settings.BaseSettings):
 
     VIDEO_FRAME_LOADER_PROCESSES: Optional[int] = 2
 
-    VIDEO_USE_FFMPEG_WITH_CUDA: bool = (
-        False  # Leverage's OPENCV's video_codec;h264_cuvid capture option (only works if proper ffmpeg + GPU encoders are installed)
-    )
-
+    # VIDEO_USE_CUDACODEC_WITH_CUDA appears to be faster than VIDEO_USE_FFMPEG_WITH_CUDA
     VIDEO_USE_CUDACODEC_WITH_CUDA: bool = (
         False  # Leverage's OPENCV's native GPU video processing functionality (only works if proper OpenCV package is installed)
+    )
+
+    VIDEO_USE_FFMPEG_WITH_CUDA: bool = (
+        False  # Leverage's FFMPEG + CUDA for video processing (-hwaccel cuda) (only works if proper ffmpeg + GPU encoders are installed)
     )

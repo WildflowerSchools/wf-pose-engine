@@ -81,7 +81,7 @@ RUN git clone --branch ${OPENCV_VERSION} --recursive https://github.com/opencv/o
 
 RUN eval "$(pyenv init -)" && pyenv local ${PYTHON_VERSION} && \
     pip install numpy && \
-    export CMAKE_ARGS="-DWITH_FFMPEG=1 -DWITH_CUDA=ON -DENABLE_FAST_MATH=1 -DCUDA_FAST_MATH=1 -DWITH_CUBLAS=1 -DWITH_NVCUVENC=OFF -DCMAKE_LIBRARY_PATH=/usr/local/cuda/lib64/stubs" && \
+    export CMAKE_ARGS="-DWITH_FFMPEG=1 -DWITH_CUDA=ON -DWITH_CUBLAS=1 -DWITH_NVCUVENC=OFF -DCMAKE_LIBRARY_PATH=/usr/local/cuda/lib64/stubs" && \
     export CMAKE_ARGS="${CMAKE_ARGS} -DWITH_NVCUVID=ON -DCUDA_nvcuvid_LIBRARY=/usr/local/nvidia-video-codec/Lib/linux/stubs/x86_64/libnvcuvid.so" && \
     export CMAKE_ARGS="${CMAKE_ARGS} -DBUILD_LIST=\"core cudaarithm calib3d cudacodec cudafeatures2d cudafilters cudaimgproc cudalegacy cudastereo cudawarping cudev dnn dnn_objdetect dnn_superres features2d flann gapi highgui img_hash imgcodecs imgproc ml objdetect photo python3 stitching text video videoio videostab ximgproc xobjdetect xphoto\"" && \
     export CMAKE_ARGS="${CMAKE_ARGS} -DPYTHON3_NUMPY_INCLUDE_DIRS=$(python3 -c 'import numpy; print(numpy.get_include())')" && \
