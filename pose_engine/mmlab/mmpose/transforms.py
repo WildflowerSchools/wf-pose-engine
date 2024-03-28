@@ -116,7 +116,7 @@ class BatchBottomupResize:
             .to(device, memory_format=torch.channels_last, non_blocking=True)
         )
         logger.info(
-            f"BottomupResize transform: time to move tensor to GPU: {round(time.time() - s, 3)}"
+            f"BottomupResize transform: time to move tensor to {device}: {round(time.time() - s, 3)}"
         )
 
         s = time.time()

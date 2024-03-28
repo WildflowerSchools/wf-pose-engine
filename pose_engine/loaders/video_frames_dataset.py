@@ -13,6 +13,7 @@ import torch.utils.data
 from cv_utils import VideoInput
 from faster_fifo import Queue as ffQueue
 
+from pose_engine.config import Settings
 from pose_engine.log import logger
 
 
@@ -72,6 +73,13 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
         self._video_loader_first_frame_read_time: sharedctypes.Synchronized = mp.Value(
             "d", -1.0
         )
+
+        pose_engine_settings = Settings()
+        self.use_gpu = (
+            pose_engine_settings.VIDEO_USE_FFMPEG_WITH_CUDA
+            or pose_engine_settings.VIDEO_USE_CUDACODEC_WITH_CUDA
+        )
+        self.use_cvcuda = pose_engine_settings.VIDEO_USE_CUDACODEC_WITH_CUDA
 
     def add_data_object(self, data_object):
         self.video_object_queue.put(data_object)
@@ -166,8 +174,13 @@ class VideoFramesDataset(torch.utils.data.IterableDataset):
                 logger.info(
                     f"Loading frames from {video_path}... (Current video frame queue size: {self.size()}, Total video frames queued: {self.total_video_frames_queued})"
                 )
+
                 video_reader = VideoInput(
-                    input_path=video_path, queue_frames=False, queue_size=128
+                    input_path=video_path,
+                    use_gpu=self.use_gpu,
+                    use_cvcuda=self.use_cvcuda,
+                    queue_frames=True,
+                    queue_size=128,
                 )
 
                 frame_idx = 0

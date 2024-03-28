@@ -16,10 +16,23 @@ poetry run python -m pose_engine \
 
 ## Run Pose Generation using Docker
 
-1. First build the container
-```
-just build-docker
-```
+1. Build the container
+
+    a. Before building, you need to install two packages on your host machine. `libnvidia-decode-XXX and libnvidia-encode-XXX`. Be sure they match your Nvidia driver version.
+
+    > e.g. `apt install libnvidia-decode-545 libnvidia-encode-545`
+
+    b. You then need to download the [Nvidia Video Codec interface headers](https://developer.nvidia.com/nvidia-video-codec-sdk/download) (this must be done manually from Nvidia's website)
+
+    ```
+    bsdtar --strip-components=1 -xvf Video_Codec_SDK_12.2.72.zip -C ./nvidia-video-codec
+    ```
+
+    c. Run build
+
+    ```
+    just build-docker
+    ```
 
 2. Then create a .docker.env file in the project root and fill in the req'd vars
 ```

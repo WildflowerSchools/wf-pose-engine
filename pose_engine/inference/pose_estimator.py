@@ -265,6 +265,16 @@ class PoseEstimatorPreProcessor:
             f"Pre-processing pipeline performance (device: {self.device}): {len(pre_processed_data_list)} records {round(total_pre_processing_time, 3)} seconds {records_per_second} records/second"
         )
 
+        if len(pre_processed_data_list) > 0 and isinstance(
+            pre_processed_data_list[0]["inputs"], torch.Tensor
+        ):
+            imgs = torch.stack(
+                list(map(lambda r: r["inputs"], pre_processed_data_list))
+            ).to("cpu")
+
+            for idx, _ in enumerate(pre_processed_data_list):
+                pre_processed_data_list[idx]["inputs"] = imgs[idx]
+
         return pre_processed_data_list
 
     def _preprocessing_process(self, process_index: int, loader=None):

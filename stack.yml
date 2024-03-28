@@ -11,7 +11,9 @@ services:
     env_file:
       - path: .docker.env
         required: true
-    shm_size: 8gb
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+    shm_size: 16gb
     deploy:
       resources:
         reservations:
