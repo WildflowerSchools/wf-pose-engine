@@ -31,8 +31,8 @@ class PosesDataset(torch.utils.data.IterableDataset):
         if mp_manager is None:
             mp_manager = mp.Manager()
 
-        # self.pose_queue = mp_manager.Queue(maxsize=pose_queue_maxsize)
-        self.pose_queue = ffQueue(max_size_bytes=3 * 640 * 480 * pose_queue_maxsize)
+        self.pose_queue = mp_manager.Queue(maxsize=pose_queue_maxsize)
+        # self.pose_queue = ffQueue(max_size_bytes=3 * 640 * 480 * pose_queue_maxsize)
 
     def add_data_object(self, data_object):
         self.pose_queue.put(data_object)

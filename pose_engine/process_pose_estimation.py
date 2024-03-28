@@ -215,12 +215,12 @@ class ProcessPoseEstimation:
             == pose_2d.PoseEstimatorType.top_down
         )
 
-    def add_data_objects(self, data_objects=None):
-        if data_objects is None:
-            data_objects = []
+    # def add_data_objects(self, data_objects=None):
+    #     if data_objects is None:
+    #         data_objects = []
 
-        for data_object in data_objects:
-            self.data_loader.dataset.add_data_object(data_object)
+    #     for data_object in data_objects:
+    #         self.data_loader.dataset.add_data_object(data_object)
 
     def start(self):
         if self.process is None:
@@ -233,7 +233,9 @@ class ProcessPoseEstimation:
                     join=False,
                 )
             else:
-                self.process: mp.Process = mp.Process(target=self._run, args=())
+                self.process: mp.Process = mp.Process(
+                    target=self._run, args=(), daemon=False
+                )
                 self.process.start()
 
     def wait(self):
@@ -268,6 +270,7 @@ class ProcessPoseEstimation:
                 model_config_path=self.pose_estimator_model.model_config,
                 checkpoint=self.pose_estimator_model.checkpoint,
                 deployment_config_path=self.pose_estimator_model.deployment_config,
+                model_runtime=self.pose_estimator_model.model_runtime.value,
                 device=pose_estimator_device,
                 batch_size=self.batch_size,
                 use_fp16=self.use_fp16,
@@ -286,9 +289,6 @@ class ProcessPoseEstimation:
                 self.pose_estimation_instance_statuses[rank].start_time = (
                     pose_estimator.start_time
                 )
-                self.pose_estimation_instance_statuses[rank].stop_time = (
-                    pose_estimator.stop_time
-                )
                 self.pose_estimation_instance_statuses[rank].running_time_from_start = (
                     pose_estimator.running_time_from_start
                 )
@@ -306,11 +306,16 @@ class ProcessPoseEstimation:
 
                 self.output_poses_dataset.add_data_object(pose_tuple)
 
+            self.pose_estimation_instance_statuses[rank].stop_time = (
+                pose_estimator.stop_time
+            )
+
         except Exception as e:
             logger.error(e)
             raise e
         finally:
             if pose_estimator is not None:
+                pose_estimator.stop_pre_processor()
                 del pose_estimator
 
             if self.run_distributed and rank is not None:

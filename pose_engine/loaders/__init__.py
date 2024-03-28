@@ -4,3 +4,5 @@ from .video_frames_dataloader import VideoFramesDataLoader
 from .video_frames_dataset import VideoFramesDataset
 from .poses_dataloader import PosesDataLoader
 from .poses_dataset import PosesDataset
+from .rtmo_images_dataloader import RTMOImagesDataLoader
+from .rtmo_images_dataset import RTMOImagesDataset

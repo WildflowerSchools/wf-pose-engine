@@ -276,6 +276,10 @@ class ProcessStatusPoll:
                     )
 
             if self.stop_event.is_set():
+                last_inference_time = (
+                    self.pose_estimation_process.latest_processing_stop_time
+                )
+
                 first_inference_time = None
                 if (
                     first_detector_inference_time is not None
@@ -296,7 +300,7 @@ class ProcessStatusPoll:
 
                 if first_inference_time is not None:
                     seconds_running_from_first_inference = round(
-                        current_run_time - first_inference_time, 2
+                        last_inference_time - first_inference_time, 2
                     )
                     logger.info(
                         f"Status: Overall run details from first inference: {round(current_pose_frame_count / seconds_running_from_first_inference, 2)} FPS | {round(current_pose_inference_count / seconds_running_from_first_inference, 2)} BBPS (bounding boxes per second) | {seconds_running_from_first_inference} seconds running from first inference | {current_pose_frame_count} frames | {current_pose_inference_count} bounding boxes"

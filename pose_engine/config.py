@@ -12,7 +12,7 @@ class Settings(pydantic_settings.BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
-        env_prefix="POSE_ENGINE",
+        env_prefix="POSE_ENGINE_",
     )
 
     USER_CACHE_DIR: str = platformdirs.user_cache_dir(
@@ -27,3 +27,14 @@ class Settings(pydantic_settings.BaseSettings):
     )
 
     STORE_POSES: bool = False
+
+    VIDEO_FRAME_LOADER_PROCESSES: Optional[int] = 2
+
+    # VIDEO_USE_CUDACODEC_WITH_CUDA appears to be faster than VIDEO_USE_FFMPEG_WITH_CUDA
+    VIDEO_USE_CUDACODEC_WITH_CUDA: bool = (
+        False  # Leverage's OPENCV's native GPU video processing functionality (only works if proper OpenCV package is installed)
+    )
+
+    VIDEO_USE_FFMPEG_WITH_CUDA: bool = (
+        False  # Leverage's FFMPEG + CUDA for video processing (-hwaccel cuda) (only works if proper ffmpeg + GPU encoders are installed)
+    )
